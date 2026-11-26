@@ -22,9 +22,10 @@
  *   Newest change (t) wins per item.
  *
  * Health inbox (FitTrack + iPhone Shortcuts), one small mailbox per phone:
- *   GET/POST /inbox/<64-hex token>?steps=..&sleep=..&weight=..&water=..   (from Shortcuts: no Origin header needed)
+ *   GET/POST /inbox/<64-hex token>  steps, sleep, weight, water, kcal (active), exmin, rhr (resting HR), hr (avg HR)
+ *            as ?query or a JSON body (from Shortcuts: no Origin header needed)
  *   POST     /inbox/take { token }  -> { items:[{at,steps,sleep,weight,water}] }  and empties the mailbox (app only)
- *   Only those four numbers are kept, for at most 14 days or until the app picks them up.
+ *   Only those numbers are kept, for at most 14 days or until the app picks them up.
  *
  * Timers may carry an optional title (FitTrack fasting alerts); default is "⏰ Timer done".
  */
@@ -157,8 +158,10 @@ export class SyncStore {
     if (path === "/inbox/put") {
       // lenient: Shortcuts may send "8,421", "7.5 hr" or "228.4 lb"
       const num = (v, max) => { const m = String(v ?? "").replace(/,(\d{3})(?!\d)/g, "$1").replace(",", ".").match(/\d+(\.\d+)?/); const n = m ? Number(m[0]) : NaN; return Number.isFinite(n) && n > 0 && n <= max ? Math.round(n * 100) / 100 : undefined; };
-      const e = { at: Date.now(), steps: num(b.steps, 200000), sleep: num(b.sleep, 24), weight: num(b.weight, 2000), water: num(b.water, 100) };
-      if (e.steps === undefined && e.sleep === undefined && e.weight === undefined && e.water === undefined) return this.reply({ error: "nothing to save: send steps, sleep, weight or water" }, 400);
+      const e = { at: Date.now(), steps: num(b.steps, 200000), sleep: num(b.sleep, 24), weight: num(b.weight, 2000), water: num(b.water, 100),
+        kcal: num(b.kcal, 15000), exmin: num(b.exmin, 1440), rhr: num(b.rhr, 250), hr: num(b.hr, 250) };
+      for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
+      if (Object.keys(e).length < 2) return this.reply({ error: "nothing to save: send steps, sleep, weight, water, kcal, exmin, rhr or hr" }, 400);
       const list = ((await st.get("inbox")) || []).filter(x => x.at > Date.now() - 14 * 864e5).slice(-49);
       list.push(e);
       await st.put("inbox", list);
