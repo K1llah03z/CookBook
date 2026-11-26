@@ -1,6 +1,6 @@
 # Easy Keto Carnivore Cookbook
 
-2,000 easy keto carnivore recipes as an installable, offline web app, plus an optional free timer-alert server, so kitchen timers alert your phone's lock screen even when the app is closed.
+2,500 easy keto carnivore recipes as an installable, offline web app, plus an optional free timer-alert server, so kitchen timers alert your phone's lock screen even when the app is closed.
 
 ```
 docs/          the website (GitHub Pages serves this folder)

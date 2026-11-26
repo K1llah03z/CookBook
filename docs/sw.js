@@ -1,9 +1,9 @@
 /* Easy Keto Carnivore Cookbook — service worker: offline copy + updates.
    VERSION is year.month.DDNN: day of the month + that day's build number (example: 2026.12.501 = Dec 5, build 1).
    publish.ps1 sets it for you. Any change to this file tells phones an update is available. */
-const VERSION = "2026.11.2612";
+const VERSION = "2026.11.2604";
 const CACHE = "ekc-" + VERSION;
-const CORE = ["./", "index.html", "styles.css", "app.js", "recipes.js", "config.js", "manifest.webmanifest",
+const CORE = ["./", "index.html", "styles.css", "app.js", "recipes.js", "nutrition.js", "config.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png",
   "icons/apple-touch-icon.png", "icons/favicon-32.png", "vendor/jspdf.umd.min.js", "vendor/qrcode.js"];
 

@@ -18,7 +18,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 
 /* ---------- saved state (this device only) ---------- */
 const KEY = "ekc:v1";
-const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, eat: {}, recent: [], plan: {}, list: [], pantry: [],
+const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, eat: {}, mine: {}, recent: [], plan: {}, list: [], pantry: [],
   pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null });
 let S;
 try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
@@ -32,13 +32,23 @@ function counts() {
 }
 
 /* ---------- search index ---------- */
-for (const r of R) {
+function indexRecipe(r) {
   r.tot = r.p + r.k;
   r._t = norm(r.t);
   r._g = norm(r.g.join(" | "));
   r._d = norm(r.d.join(" ") + " " + r.x);
   r._tag = norm([M.cats[r.c], ...r.m.map(i => M.ing[i]), ...r.h.map(i => M.meth[i]),
-    r.b ? "budget cheap" : "", r.tot <= 20 ? "quick fast easy 20 minutes" : "", r.k === 0 ? "no cook" : ""].join(" "));
+    r.b ? "budget cheap" : "", r.tot <= 20 ? "quick fast easy 20 minutes" : "", r.k === 0 ? "no cook" : "", r.mine ? "my own recipe mine" : ""].join(" "));
+}
+R.forEach(indexRecipe);
+// Your own recipes live in S.mine (synced) and are merged into the same list as the book's recipes.
+function loadMine() {
+  for (let i = R.length - 1; i >= 0; i--) if (R[i].mine) { byId.delete(R[i].i); R.splice(i, 1); }
+  for (const r of Object.values(S.mine || {})) {
+    if (!r || !r.i || !r.t) continue;
+    const x = Object.assign({ m: [], h: [], b: 0, u: "", x: "" }, r, { mine: true });
+    indexRecipe(x); R.push(x); byId.set(x.i, x);
+  }
 }
 const NUMF = /\b(calories|calorie|cals?|kcal|protein|fat|net ?carbs?|carbs?|time|minutes|mins?|serves|servings)\s*(<=|>=|<|>|=)\s*(\d+(?:\.\d+)?)/gi;
 function parseQuery(q) {
@@ -332,20 +342,23 @@ try { const f = JSON.parse(sessionStorage.getItem("ekc:f") || "null"); if (f) Ob
 /* ---------- my recipes (lists) ---------- */
 function viewMine(tab) {
   setTab("fav");
-  const tabs = [...LISTS, ["made", "Cooked", "✓", "#3f7a4a"], ["recent", "Recently viewed", "🕘", "#6e625b"]];
+  const tabs = [...LISTS, ["own", "My own", "✍️", "#6b4a32"], ["made", "Cooked", "✓", "#3f7a4a"], ["recent", "Recently viewed", "🕘", "#6e625b"]];
   tab = tabs.some(t => t[0] === tab) ? tab : "fav";
   const lists = {
     made: Object.keys(S.made).map(Number).filter(i => byId.get(i)).sort((a, b) => S.made[b].slice(-1)[0] - S.made[a].slice(-1)[0]).map(i => byId.get(i)),
     recent: S.recent.map(i => byId.get(i)).filter(Boolean),
     fav: R.filter(r => S.fav[r.i]).sort((a, b) => S.fav[b.i] - S.fav[a.i]),
+    own: R.filter(r => r.mine).sort((a, b) => a.t.localeCompare(b.t)),
   };
   const list = lists[tab] || R.filter(r => S.status[r.i] === tab);
   const n = k => (lists[k] || R.filter(r => S.status[r.i] === k)).length;
   const empty = { fav: "Tap the heart on any recipe to save it here.", want: "On a recipe page, tap “☆ Want to try” to build your to-cook list.",
     liked: "After you cook something, mark it “👍 Tried · liked”.", dis: "Recipes you mark “👎 Tried · didn't like” land here and are hidden from browsing and auto-fill.",
-    made: "Tap “✓ I made this” on a recipe (or finish Cook mode) to log it.", recent: "Recipes you open show up here." }[tab];
+    made: "Tap “✓ I made this” on a recipe (or finish Cook mode) to log it.", recent: "Recipes you open show up here.",
+    own: "Add family favorites and your own creations. They get nutrition, search, the meal planner and sync, just like the book's recipes." }[tab];
   app.innerHTML = `<h1 style="margin:0 0 10px">My recipes</h1>
     <div class="chips" style="margin-bottom:16px">${tabs.map(([k, t, ic]) => `<a class="chip ${k === tab ? "on" : ""}" href="#/mine/${k}" style="text-decoration:none">${ic} ${esc(t)} <span class="muted">${n(k)}</span></a>`).join("")}</div>
+    ${tab === "own" ? `<p style="margin-top:-6px"><a class="btn primary sm" href="#/add" style="text-decoration:none">＋ Add my own recipe</a></p>` : ""}
     ${tab === "want" && list.length ? `<p style="margin-top:-6px"><button class="btn sm" id="wantPlan">${ICON.cal} Put want-to-try recipes in my meal plan</button></p>` : ""}
     ${list.length ? `<p style="margin-top:-6px"><button class="btn sm" id="minePdf">${ICON.print} PDF of these ${list.length} recipe${list.length === 1 ? "" : "s"}</button></p>` : ""}
     <div id="mineRes"></div>`;
@@ -361,6 +374,88 @@ function viewMine(tab) {
       ((S.plan[d] = S.plan[d] || {})[s] = []).push(q.splice(ix, 1)[0].i); added++;
     }
     save(); toast(added ? `Added ${added} to empty meals` : "No empty meals left that fit"); location.hash = "#/plan";
+  };
+}
+
+
+/* ---------- my own recipes: add / edit / delete (synced with your other devices) ---------- */
+const MY_ING = [/ground (beef|chuck)/, /ribeye|strip steak|sirloin|filet|t-bone|porterhouse|flank|skirt|hanger|flat iron|picanha|tri-tip|\bsteak/, /roast|brisket|short rib|oxtail|shank|cheek|prime rib/,
+  /pork chop|pork loin|tenderloin|cutlet|schnitzel/, /pork shoulder|pork butt|pulled pork|carnitas|spare rib|baby back|country-style/, /pork belly|bacon|pancetta|lardon/, /ground pork/,
+  /sausage|chorizo|brat|kielbasa|andouille|\bham\b|salami|pepperoni|prosciutto|hot dog/, /chicken thigh|drumstick|leg quarter/, /chicken breast|chicken tender|cutlets/, /\bwings?\b/,
+  /whole chicken|rotisserie|shredded chicken|cooked chicken|ground chicken/, /turkey/, /duck|goose|quail|pheasant|cornish/, /lamb|mutton|goat/, /venison|bison|elk|boar|rabbit|ostrich|antelope/,
+  /\beggs?\b|omelet|frittata|quiche|custard|chaffle|waffle|pancake|crepe/, /cheese|cream|butter|ricotta|mascarpone|mozzarella|cheddar|parmesan|feta|brie/];
+const MY_METH = [/slow cook/, /pressure cook|instant pot/, /air fr/, /grill/, /smoke/, /sous vide/];
+let nutLoad = null;
+const loadNut = () => window.ekcNutrition ? Promise.resolve() : nutLoad || (nutLoad = new Promise((ok, bad) => { const s = document.createElement("script"); s.src = "nutrition.js"; s.onload = ok; s.onerror = () => { nutLoad = null; bad(new Error("couldn't load the nutrition calculator")); }; document.head.appendChild(s); }));
+const myLines = v => String(v || "").split(/\n+/).map(x => x.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim()).filter(Boolean);
+function viewEditor(id) {
+  setTab("fav");
+  const old = id ? byId.get(id) : null;
+  if (id && (!old || !old.mine)) { app.innerHTML = `<div class="empty"><b>Only your own recipes can be edited</b><a href="#/mine/own">My own recipes</a></div>`; return; }
+  const r = old || { t: "", c: 1, p: 10, k: 20, s: 4, g: [], d: [], x: "", n: null, nm: false };
+  app.innerHTML = `<h1 style="margin:0 0 10px">${old ? "Edit my recipe" : "Add my own recipe"}</h1>
+  <div class="box" style="max-width:760px">
+    <label class="muted" for="eT">Recipe name</label><input class="inp" id="eT" value="${esc(r.t)}" placeholder="Grandma's Pot Roast" maxlength="90">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px">
+      <div><label class="muted" for="eC">Category</label><select class="inp" id="eC">${M.cats.map((c, i) => `<option value="${i}" ${i === r.c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
+      <div><label class="muted" for="eP">Prep (min)</label><input class="inp" id="eP" type="number" inputmode="numeric" min="0" value="${r.p}"></div>
+      <div><label class="muted" for="eK">Cook (min)</label><input class="inp" id="eK" type="number" inputmode="numeric" min="0" value="${r.k}"></div>
+      <div><label class="muted" for="eS">Serves</label><input class="inp" id="eS" type="number" inputmode="numeric" min="1" value="${r.s}"></div>
+    </div>
+    <label class="muted" for="eG" style="display:block;margin-top:10px">Ingredients, one per line, with amounts (like “2 lb chuck roast”)</label>
+    <textarea class="inp" id="eG" rows="7" style="width:100%;box-sizing:border-box;font:inherit;line-height:1.5" placeholder="2 lb chuck roast&#10;4 tbsp butter&#10;1 cup beef bone broth&#10;Salt to taste">${esc(r.g.join("\n"))}</textarea>
+    <label class="muted" for="eD" style="display:block;margin-top:10px">Steps, one per line (times like “20 minutes” get a timer button)</label>
+    <textarea class="inp" id="eD" rows="6" style="width:100%;box-sizing:border-box;font:inherit;line-height:1.5" placeholder="Sear the roast in butter.&#10;Add broth, cover, and bake at 300F for 3 hours.">${esc(r.d.join("\n"))}</textarea>
+    <label class="muted" for="eX" style="display:block;margin-top:10px">Tip (optional)</label><input class="inp" id="eX" value="${esc(r.x || "")}" maxlength="200">
+    <div class="box" style="margin-top:14px;background:var(--soft)">
+      <b>Nutrition per serving</b> <span class="muted" style="font-size:13px" id="eNutMsg">calculating…</span>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:8px">
+        ${[["eN0", "Calories"], ["eN1", "Protein g"], ["eN2", "Fat g"], ["eN3", "Net carbs g"]].map(([k, l]) => `<div><label class="muted" for="${k}">${l}</label><input class="inp" id="${k}" type="number" inputmode="decimal" min="0" step="any"></div>`).join("")}
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:14px"><input type="checkbox" id="eManual" ${r.nm ? "checked" : ""}> I'll enter nutrition myself (from a label or app)</label>
+    </div>
+    <div class="row" style="justify-content:space-between;margin-top:14px">
+      <span>${old ? `<button class="btn" id="eDel" style="color:#c44">Delete</button>` : ""}</span>
+      <span style="display:flex;gap:8px"><a class="btn" href="${old ? "#/r/" + old.i : "#/mine/own"}">Cancel</a><button class="btn primary" id="eSave">Save recipe</button></span>
+    </div>
+  </div>`;
+  const nIn = [0, 1, 2, 3].map(i => $("#eN" + i));
+  const setN = n => { nIn[0].value = Math.round(n[0]); nIn[1].value = Math.round(n[1]); nIn[2].value = Math.round(n[2]); nIn[3].value = Math.round(n[3] * 10) / 10; };
+  if (r.n) setN(r.n);
+  const lockN = () => nIn.forEach(x => x.readOnly = !$("#eManual").checked);
+  let est = null;
+  const calc = async () => {
+    if (!$("#eManual")) return;                                   // left the editor
+    if ($("#eManual").checked) { $("#eNutMsg").textContent = "entered by you"; return; }
+    try { await loadNut(); } catch (e) { $("#eNutMsg").textContent = "calculator unavailable offline: enter it yourself"; return; }
+    if (!$("#eManual")) return;
+    est = window.ekcNutrition({ title: $("#eT").value, cat: M.cats[+$("#eC").value], serves: $("#eS").value, ing: myLines($("#eG").value) });
+    setN([est.kcal, est.p, est.f, est.c]);
+    $("#eNutMsg").innerHTML = est.note ? "estimated, " + esc(est.note) : est.unknown.length ? `estimated · <span style="color:#b5651d">couldn't read: ${est.unknown.map(esc).join(", ")}</span>` : "estimated from your ingredients";
+  };
+  let ct; const soon = () => { clearTimeout(ct); ct = setTimeout(calc, 400); };
+  ["#eT", "#eC", "#eS", "#eG"].forEach(s => $(s).addEventListener("input", soon));
+  $("#eManual").onchange = () => { lockN(); calc(); };
+  lockN(); calc();
+  $("#eSave").onclick = async () => {
+    const t = $("#eT").value.trim(), g = myLines($("#eG").value), d = myLines($("#eD").value);
+    if (!t) { toast("Give your recipe a name"); $("#eT").focus(); return; }
+    if (!g.length) { toast("Add at least one ingredient"); $("#eG").focus(); return; }
+    if (!$("#eManual").checked) await calc();
+    const k = Math.max(0, +$("#eK").value || 0), text = (t + " " + g.slice(0, 2).join(" ")).toLowerCase(), steps = d.join(" ").toLowerCase();
+    const rec = { i: old ? old.i : Math.floor(Date.now() / 1000), t, c: +$("#eC").value, p: Math.max(0, +$("#eP").value || 0), k, s: Math.max(1, Math.round(+$("#eS").value || 1)),
+      g, d: d.length ? d : ["Cook and enjoy."], x: $("#eX").value.trim(), n: nIn.map((x, i) => i === 3 ? Math.round((+x.value || 0) * 10) / 10 : Math.round(+x.value || 0)),
+      u: !$("#eManual").checked && est && est.note ? est.note : "", nm: $("#eManual").checked,
+      m: MY_ING.map((rx, i) => rx.test(text) ? i : -1).filter(i => i >= 0), h: [...MY_METH.map((rx, i) => rx.test(steps + " " + t.toLowerCase()) ? i : -1).filter(i => i >= 0), ...(k === 0 ? [6] : [])],
+      b: 0, made: old ? old.made : Date.now() };
+    S.mine[rec.i] = rec; save(); loadMine();
+    toast(old ? "Saved ✓" : "Added to your recipes ✓"); location.hash = "#/r/" + rec.i;
+  };
+  if ($("#eDel")) $("#eDel").onclick = () => {
+    if (!confirm(`Delete “${old.t}”? This removes it from all your synced devices.`)) return;
+    delete S.mine[old.i]; delete S.fav[old.i]; delete S.status[old.i]; delete S.notes[old.i]; delete S.rating[old.i];
+    for (const d in S.plan) for (const s in S.plan[d]) S.plan[d][s] = (S.plan[d][s] || []).filter(x => x !== old.i);
+    save(); loadMine(); toast("Deleted"); location.hash = "#/mine/own";
   };
 }
 
@@ -398,7 +493,7 @@ function viewRecipe(id) {
       <span>${prev ? `<a class="btn sm" href="#/r/${prev.i}" title="${esc(prev.t)}">‹ Prev</a>` : ""} ${next ? `<a class="btn sm" href="#/r/${next.i}" title="${esc(next.t)}">Next ›</a>` : ""}</span>
     </div>
     <div class="r-head" style="background:${c}">
-      <div class="kicker">${esc(M.cats[r.c])} · Recipe ${r.i}${r.b ? " · Budget pick" : ""}</div>
+      <div class="kicker">${esc(M.cats[r.c])} · ${r.mine ? "✍️ My own recipe" : "Recipe " + r.i}${r.b ? " · Budget pick" : ""}</div>
       <h1>${esc(r.t)}</h1>
     </div>
     <div class="facts">
@@ -422,6 +517,7 @@ function viewRecipe(id) {
       <button class="btn" id="listBtn">${ICON.cart} Add to shopping list</button>
       <button class="btn" id="printBtn">${ICON.print} PDF / Print</button>
       <button class="btn" id="shareBtn">${ICON.share} Share</button>
+      ${r.mine ? `<a class="btn" href="#/edit/${id}" style="text-decoration:none">✏️ Edit</a>` : ""}
     </div>
     <div class="status-row no-print" role="group" aria-label="My list">
       <span class="muted" style="font-size:13px;font-weight:700">My list:</span>
@@ -1166,7 +1262,7 @@ const fnv = str => { let h = 2166136261; for (let i = 0; i < str.length; i++) { 
 // What syncs: everything except device-only things (timers, alert setting, theme, the sync settings).
 function flattenState() {
   const f = {};
-  for (const [pre, obj] of [["fav", S.fav], ["status", S.status], ["notes", S.notes], ["rating", S.rating], ["made", S.made], ["eat", S.eat || {}]])
+  for (const [pre, obj] of [["fav", S.fav], ["status", S.status], ["notes", S.notes], ["rating", S.rating], ["made", S.made], ["eat", S.eat || {}], ["mine", S.mine || {}]])
     for (const k in obj) f[pre + ":" + k] = obj[k];
   for (const d in S.plan) for (const sl in S.plan[d]) if ((S.plan[d][sl] || []).length) f["plan:" + d + ":" + sl] = S.plan[d][sl];
   for (const it of S.list) f["list:" + it.key] = it;
@@ -1174,8 +1270,8 @@ function flattenState() {
   return f;
 }
 function applyFlat(f) {
-  const fav = {}, status = {}, notes = {}, rating = {}, made = {}, eat = {}, plan = {}, list = [];
-  const maps = { fav, status, notes, rating, made, eat };
+  const fav = {}, status = {}, notes = {}, rating = {}, made = {}, eat = {}, mine = {}, plan = {}, list = [];
+  const maps = { fav, status, notes, rating, made, eat, mine };
   for (const [n, v] of Object.entries(f)) {
     const [pre, a, b] = n.split(":");
     if (maps[pre] && a !== undefined) maps[pre][n.slice(pre.length + 1)] = v;
@@ -1184,7 +1280,8 @@ function applyFlat(f) {
   }
   const order = new Map(S.list.map((x, i) => [x.key, i]));
   list.sort((x, y) => (order.has(x.key) ? order.get(x.key) : 1e9) - (order.has(y.key) ? order.get(y.key) : 1e9));
-  Object.assign(S, { fav, status, notes, rating, made, eat, plan, list });
+  Object.assign(S, { fav, status, notes, rating, made, eat, mine, plan, list });
+  loadMine();
   for (const k of ["pantry", "pantryFats", "goals", "people", "recent"]) if (k in f) S[k] = f[k];
 }
 let syncBusy = false, syncAgain = false, syncT = null, syncPoll = null;
@@ -1447,7 +1544,7 @@ function viewSettings() {
   $$("[data-th]").forEach(b => b.onclick = () => { S.theme = b.dataset.th || null; applyTheme(); save(); viewSettings(); });
   if ($("#install")) $("#install").onclick = async () => { if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewSettings(); } };
   $("#bExp").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: "application/json" })); a.download = `carnivore-cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
-  $("#bImp").onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== "object" || !d.fav) throw 0; S = Object.assign(DEF(), d); timersFromState(); syncKeyCache = null; startSyncLoop(); save(); applyTheme(); toast("Backup restored"); viewSettings(); } catch (x) { toast("That file isn't a cookbook backup"); } };
+  $("#bImp").onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== "object" || !d.fav) throw 0; S = Object.assign(DEF(), d); loadMine(); timersFromState(); syncKeyCache = null; startSyncLoop(); save(); applyTheme(); toast("Backup restored"); viewSettings(); } catch (x) { toast("That file isn't a cookbook backup"); } };
   $("#bReset").onclick = () => { if (confirm("Erase favorites, notes, ratings, plans and lists on this device?")) { clearInterval(syncPoll); S = DEF(); save(); applyTheme(); timersFromState(); viewSettings(); } };
 }
 function searchHelp() {
@@ -1475,6 +1572,8 @@ function route() {
   document.querySelectorAll(".cook,.modal-bg").forEach(x => x.remove());
   if (!/^#\/r\//.test(h)) shownRecipe = null;
   if ((m = h.match(/^#\/r\/(\d+)/))) viewRecipe(+m[1]);
+  else if (h.startsWith("#/add")) viewEditor(null);
+  else if ((m = h.match(/^#\/edit\/(\d+)/))) viewEditor(+m[1]);
   else if (h.startsWith("#/mine") || h.startsWith("#/fav")) viewMine((h.match(/^#\/mine\/(\w+)/) || [])[1]);
   else if (h.startsWith("#/plan")) viewPlan();
   else if (h.startsWith("#/list")) viewList();
@@ -1563,5 +1662,5 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   }).catch(() => {});
 }
 
-applyTheme(); counts(); timersFromState(); route(); startSyncLoop();
+applyTheme(); loadMine(); counts(); timersFromState(); route(); startSyncLoop();
 })();

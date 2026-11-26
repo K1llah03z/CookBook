@@ -63,7 +63,7 @@ aside.filters h4:first-child{margin-top:0}
 .range{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center;font-size:13.5px}
 .range input{width:100%;accent-color:var(--accent)}
 .range output{font-weight:700;min-width:64px;text-align:right}
-select.inp,input.inp{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+select.inp,input.inp,textarea.inp{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
 .check{display:flex;gap:8px;align-items:center;font-size:14px;margin:3px 0}
 .check input{accent-color:var(--accent);width:16px;height:16px}
 .resbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
