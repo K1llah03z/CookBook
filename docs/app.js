@@ -19,7 +19,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 /* ---------- saved state (this device only) ---------- */
 const KEY = "ekc:v1";
 const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, eat: {}, mine: {}, recent: [], plan: {}, list: [], pantry: [],
-  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null });
+  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null, doneness: {} });
 let S;
 try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
 let saveT;
@@ -470,14 +470,84 @@ function stepHTML(s, label) {
   });
   return out + esc(s.slice(last));
 }
+/* ---------- doneness toggle (steaks, chops, roasts) ---------- */
+// "pull" is when to take it off the heat; it rises about 5F while resting to "final".
+const DONENESS = {
+  whole: { label: "Beef, lamb & game", def: "mr", levels: [
+    ["rare", "Rare", 120, 125, "cool red center"], ["mr", "Medium-rare", 130, 135, "warm red center"], ["med", "Medium", 140, 145, "warm pink center (USDA 145F)"],
+    ["mw", "Medium-well", 145, 150, "slight pink"], ["well", "Well done", 155, 160, "no pink"]] },
+  pork: { label: "Pork chops & loin", def: "p145", levels: [
+    ["p145", "Juicy (145F)", 145, 145, "faint pink, USDA safe"], ["p150", "Medium (150F)", 150, 150, "barely pink"], ["p160", "Well done (160F)", 160, 160, "no pink"]] },
+  duck: { label: "Duck breast", def: "dmr", levels: [
+    ["dmr", "Medium-rare", 130, 135, "rosy"], ["dmed", "Medium", 140, 145, "pink"], ["dmw", "Medium-well", 150, 155, "slight pink"], ["dwell", "Well done (USDA)", 160, 165, "no pink"]] }
+};
+const NOT_STEAKY = /\bribs?\b|riblets?|spare|shoulder|shank|neck|lamb breast|brisket|oxtail|cheek|chuck|3-2-1|shaved|thinly sliced|thin-sliced|stew|stir fry|stir-fry|jerky|ground|cooked|sliced roast beef|deli|braise|slow cooker|pressure cook|instant pot|pot roast|pulled|shredded|confit/;
+function donenessKind(r) {
+  if (r.c === undefined || /Desserts|Broths/.test((M.cats || [])[r.c] || "")) return null;
+  const st = safeTemps(r).join("|");
+  if (/poultry|Ground meat|Pulled|Pork belly/.test(st)) return null;
+  const all = (r.g.join(" ") + " " + r.d.join(" ")).toLowerCase();
+  if (NOT_STEAKY.test(all)) return null;
+  if (!/\b(sear|grill|roast|broil|smoke|pan-fry|cook|air fry|sous vide)/.test(r.d.join(" ").toLowerCase())) return null;
+  if (/Duck breast/.test(st)) return "duck";
+  if (/Pork chops/.test(st)) return "pork";
+  if (/Beef, lamb/.test(st)) return "whole";
+  return null;
+}
+let curDone = {};
+function donenessLevel(id, kind) {
+  const D = DONENESS[kind], want = curDone[id] || (S.doneness || {})[kind] || D.def;
+  return D.levels.find(l => l[0] === want) || D.levels.find(l => l[0] === D.def);
+}
+function fmtHr(h) { const q = Math.round(h * 4) / 4; return (q % 1 ? String(q) : String(q)) + (q === 1 ? " hour" : " hours"); }
+// Returns a copy of r with temperatures, times, and wording set for the chosen doneness.
+function applyDoneness(r, kind, lvl) {
+  const D = DONENESS[kind], base = D.levels.find(l => l[0] === D.def), delta = lvl[2] - base[2];
+  const lo = kind === "pork" ? 128 : 110, hi = kind === "pork" ? 150 : kind === "duck" ? 142 : 150;
+  const factor = Math.max(0.7, 1 + delta * 0.025);
+  let hadTemp = false;
+  const inRange = t => t >= lo && t <= hi;
+  const HEATV = /sear|grill|roast|broil|cook|oven|smoke|pan-fry|air fry|fry|baste|hits|reaches/;
+  const sousVide = /sous vide|water bath/i.test(r.d.join(" ") + r.t);
+  const tempDriven = r.d.some(st => st.split(/(?<=\.)\s+/).some(x => HEATV.test(x.toLowerCase()) && [...x.matchAll(/\b(1\d\d)F\b/g)].some(m => inRange(+m[1]))));
+  const steps = r.d.map(step => step.split(/(?<=\.)\s+/).map(sent => {
+    let s2 = sent.replace(/\b(1\d\d)F\b/g, (m, t) => { t = +t; if (t < lo || t > hi) return m; hadTemp = true; let v = Math.round(t + delta); if (sousVide && v < 129) v = 129; return v + "F"; });
+    s2 = s2.replace(/\b(rare or medium-rare|medium-rare|medium rare)\b/gi, lvl[1].replace(/ \(.*\)/, "").toLowerCase());
+    const L = sent.toLowerCase();
+    const hasShift = [...sent.matchAll(/\b(1\d\d)F\b/g)].some(m => inRange(+m[1]));
+    const scaleHere = delta && !sousVide && /sear|grill|roast|broil|cook|oven|smoke|pan-fry|air fry|fry|baste|hits/.test(L) && !/\b(rest|marinat|brine|chill|sit|salt and|refrigerat|soak|freeze)/.test(L) && (!tempDriven || hasShift);
+    if (scaleHere) {
+      s2 = s2.replace(/(\d+(?:\.\d+)?)(?: to (\d+(?:\.\d+)?))? (minutes?|hours?)/g, (m, a, b, u, off, whole) => {
+        const before = whole.slice(Math.max(0, off - 14), off);
+        if (/\b[2-5]\d\dF (for )?$/.test(before)) return m;          // high-heat blast stage: fixed time
+        if (tempDriven && !/about $/.test(before)) return m;           // temperature decides; only scale "about" estimates
+        const f = x => /^h/.test(u) ? Math.round(x * factor * 4) / 4 : Math.max(1, Math.round(x * factor));
+        const A = f(+a), B = b ? f(+b) : null, unit = /^h/.test(u) ? ((B || A) === 1 ? "hour" : "hours") : ((B || A) === 1 ? "minute" : "minutes");
+        return (B && B !== A ? `${A} to ${B}` : `${A}`) + " " + unit;
+      });
+    }
+    return s2;
+  }).join(" "));
+  if (!hadTemp) {
+    const heat = steps.map((s, i) => /\b(sear|grill|roast|broil|smoke|cook|oven|air fry|pan-fry)/i.test(s) && !/^rest\b/i.test(s) ? i : -1).filter(i => i >= 0);
+    const at = heat.length ? heat[heat.length - 1] + 1 : steps.length;
+    const lbl = lvl[1].replace(/ \(.*\)/, "").toLowerCase();
+    steps.splice(at, 0, lvl[2] === lvl[3] ? `Cook until it reaches ${lvl[2]}F inside for ${lbl}.` : `Pull it off the heat at ${lvl[2]}F for ${lbl}. It rises to about ${lvl[3]}F while it rests.`);
+  }
+  const x = r.x ? r.x.replace(/\b(rare or medium-rare|medium-rare|medium rare)\b/gi, lvl[1].replace(/ \(.*\)/, "").toLowerCase()) : r.x;
+  const k = delta ? Math.round(r.k * factor) : r.k;
+  return Object.assign({}, r, { d: steps, x, k, tot: r.p + k });
+}
 let curServ = {};
 let shownRecipe = null;
 function viewRecipe(id) {
   const same = shownRecipe === id && location.hash.startsWith("#/r/" + id) && !!document.querySelector(".recipe");
   const keepY = same ? window.scrollY : null;
   shownRecipe = id;
-  const r = byId.get(id);
-  if (!r) { app.innerHTML = `<div class="empty"><b>Recipe not found</b><a href="#/">Back to recipes</a></div>`; return; }
+  const r0 = byId.get(id);
+  if (!r0) { app.innerHTML = `<div class="empty"><b>Recipe not found</b><a href="#/">Back to recipes</a></div>`; return; }
+  const dKind = donenessKind(r0), dLvl = dKind ? donenessLevel(id, dKind) : null;
+  const r = dKind ? applyDoneness(r0, dKind, dLvl) : r0;
   setTab("");
   if (!same && S.recent[0] !== id) { S.recent = [id, ...S.recent.filter(x => x !== id)].slice(0, 30); save(); }
   const serv = curServ[id] || r.s, k = serv / r.s, c = color(r);
@@ -509,6 +579,11 @@ function viewRecipe(id) {
       <div class="v"><b>${r.n[2]} g</b><span>Fat</span></div>
       <div class="v"><b>${fmtC(r.n[3])}</b><span>Net carbs</span></div>
     </div>
+    ${dKind ? `<div class="done-box">
+      <div class="done-h"><b>🥩 Doneness</b><span class="muted">${esc(DONENESS[dKind].label)}</span></div>
+      <div class="done-opts" role="radiogroup" aria-label="Doneness">${DONENESS[dKind].levels.map(l => `<button class="seg ${l[0] === dLvl[0] ? "on" : ""}" role="radio" aria-checked="${l[0] === dLvl[0]}" data-done="${l[0]}">${esc(l[1])}</button>`).join("")}</div>
+      <p class="done-note">${dLvl[2] === dLvl[3] ? `Cook to <b>${dLvl[2]}°F</b>` : `Pull at <b>${dLvl[2]}°F</b>, rests to about <b>${dLvl[3]}°F</b>`} · ${esc(dLvl[4])}. Steps and times below are updated. Times are estimates for about 1 inch thick; trust the thermometer.${/sous vide/i.test(r0.t + r0.d.join(" ")) && dLvl[2] < 130 ? " For sous vide, the bath never goes below 129°F, so long cooks stay safe." : ""}</p>
+    </div>` : ""}
     <div class="r-actions no-print">
       <button class="btn primary" id="cookBtn">${ICON.chef} Cook mode</button>
       <button class="btn ${S.fav[id] ? "on" : ""}" data-fav="${id}">${ICON.heart} ${S.fav[id] ? "Saved" : "Favorite"}</button>
@@ -556,7 +631,7 @@ function viewRecipe(id) {
   $("#sPlus").onclick = () => setServ(serv + 1);
   if ($("#sReset")) $("#sReset").onclick = () => { delete curServ[id]; viewRecipe(id); };
   $$("ul.ings li").forEach(li => li.addEventListener("click", e => { const cb = $("input", li); if (e.target !== cb) cb.checked = !cb.checked; li.classList.toggle("got", cb.checked); }));
-  const grow = ta => { ta.style.height = "auto"; const lines = Math.max(4, Math.ceil((ta.scrollHeight - 4) / 28) + 1); ta.style.height = (lines * 28 + 4 + 2) + "px"; };
+  const grow = ta => { if (!ta) return; ta.style.height = "auto"; const lines = Math.max(4, Math.ceil((ta.scrollHeight - 4) / 28) + 1); ta.style.height = (lines * 28 + 4 + 2) + "px"; };
   grow($("#notes")); requestAnimationFrame(() => grow($("#notes")));
   $("#notes").addEventListener("input", e => grow(e.target));
   window.addEventListener("resize", () => { const t = $("#notes"); if (t) grow(t); }, { once: true });
@@ -566,6 +641,7 @@ function viewRecipe(id) {
   $("#madeBtn").onclick = () => logMade(id);
   $("#timerBtn2").onclick = () => timerDialog(r.t);
   $("#cookBtn").onclick = () => cookMode(r, k);
+  $$("[data-done]").forEach(b => b.onclick = () => { S.doneness = S.doneness || {}; S.doneness[dKind] = b.dataset.done; delete curDone[id]; save(); viewRecipe(id); toast("Doneness set to " + DONENESS[dKind].levels.find(l => l[0] === b.dataset.done)[1] + " for " + DONENESS[dKind].label.toLowerCase()); });
   $("#planBtn").onclick = () => addToPlanDialog(id);
   $("#listBtn").onclick = () => { addToList([[r, k]]); toast(`Added ${r.g.length} ingredients to your shopping list`); };
   $("#printBtn").onclick = e => pdfOneRecipe(r, k, e.currentTarget);
@@ -1267,7 +1343,7 @@ function flattenState() {
     for (const k in obj) f[pre + ":" + k] = obj[k];
   for (const d in S.plan) for (const sl in S.plan[d]) if ((S.plan[d][sl] || []).length) f["plan:" + d + ":" + sl] = S.plan[d][sl];
   for (const it of S.list) f["list:" + it.key] = it;
-  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent;
+  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent; f.doneness = S.doneness || {};
   return f;
 }
 function applyFlat(f) {
@@ -1283,7 +1359,7 @@ function applyFlat(f) {
   list.sort((x, y) => (order.has(x.key) ? order.get(x.key) : 1e9) - (order.has(y.key) ? order.get(y.key) : 1e9));
   Object.assign(S, { fav, status, notes, rating, made, eat, mine, plan, list });
   loadMine();
-  for (const k of ["pantry", "pantryFats", "goals", "people", "recent"]) if (k in f) S[k] = f[k];
+  for (const k of ["pantry", "pantryFats", "goals", "people", "recent", "doneness"]) if (k in f) S[k] = f[k];
 }
 let syncBusy = false, syncAgain = false, syncT = null, syncPoll = null;
 window.__syncSoon = () => { if (!SYNC_ON() || syncApplying) return; clearTimeout(syncT); syncT = setTimeout(() => syncNow(), 1500); };
@@ -1535,6 +1611,9 @@ function viewGuide() {
     <div class="box"><h3>🌡️ Safe internal temperatures</h3>
       <table class="temps">${GUIDE_TEMPS.map(([a, b], i) => `<tr${i === 1 ? ' class="sub"' : ""}><td>${a}</td><td>${b}</td></tr>`).join("")}</table>
       <p class="muted" style="font-size:13px;margin-bottom:0">Check the thickest part with an instant-read thermometer, away from the bone.</p></div>
+    <div class="box"><h3>🥩 Doneness for steaks, chops and roasts</h3>
+      <table class="temps"><tr><td><b>Level</b></td><td><b>Pull at</b></td><td><b>After resting</b></td></tr>${DONENESS.whole.levels.map(l => `<tr><td>${l[1]}<br><span class="muted" style="font-size:12.5px">${esc(l[4])}</span></td><td>${l[2]}°F</td><td>${l[3]}°F</td></tr>`).join("")}</table>
+      <p class="muted" style="font-size:13px;margin-bottom:0">Pork chops and loin: 145°F (faint pink) to 160°F (well done). Pick your doneness on any steak, chop, or roast recipe and the steps update. The app remembers your choice.</p></div>
     <div class="box"><h3>🥚 Raw and lightly cooked eggs</h3>
       <p style="margin:0">A few recipes use raw or lightly cooked yolks (mayo, hollandaise, some desserts). Use pasteurized eggs for children, pregnant women, older adults, or anyone with a weak immune system.</p></div>
     <div class="box"><h3>🧺 Pantry staples</h3><ul>
