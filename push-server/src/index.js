@@ -20,6 +20,13 @@
  *   id = SHA-256 of the sync code (the code itself never reaches the server).
  *   k  = opaque item name, ct = AES-GCM ciphertext made on the device. The server can't read either.
  *   Newest change (t) wins per item.
+ *
+ * Health inbox (FitTrack + iPhone Shortcuts), one small mailbox per phone:
+ *   GET/POST /inbox/<64-hex token>?steps=..&sleep=..&weight=..&water=..   (from Shortcuts: no Origin header needed)
+ *   POST     /inbox/take { token }  -> { items:[{at,steps,sleep,weight,water}] }  and empties the mailbox (app only)
+ *   Only those four numbers are kept, for at most 14 days or until the app picks them up.
+ *
+ * Timers may carry an optional title (FitTrack fasting alerts); default is "⏰ Timer done".
  */
 
 const MAX_TIMERS = 25;
@@ -44,12 +51,28 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "carnivore-timer-push" });
     if (url.pathname === "/vapid" && req.method === "GET") return json({ publicKey: env.VAPID_PUBLIC_KEY || "" });
+    // Health inbox drop-off from iPhone Shortcuts (no browser, so no Origin header)
+    const drop = url.pathname.match(/^\/inbox\/([0-9a-f]{64})$/);
+    if (drop && (req.method === "GET" || req.method === "POST")) {
+      const vals = {};
+      for (const [k, v] of url.searchParams) vals[k] = v;
+      if (req.method === "POST") { try { Object.assign(vals, await req.json()); } catch {} }
+      const stub = env.SYNC.get(env.SYNC.idFromName("inbox:" + drop[1]));
+      const res = await stub.fetch("https://do/inbox/put", { method: "POST", body: JSON.stringify(vals) });
+      return new Response(res.body, { status: res.status, headers: { "Content-Type": "application/json", ...cors } });
+    }
     if (!allowed) return json({ error: "origin not allowed" }, 403);
-    if (req.method !== "POST" || !["/schedule", "/cancel", "/test", "/sync", "/sync/delete"].includes(url.pathname)) return json({ error: "not found" }, 404);
+    if (req.method !== "POST" || !["/schedule", "/cancel", "/test", "/sync", "/sync/delete", "/inbox/take"].includes(url.pathname)) return json({ error: "not found" }, 404);
 
     let body;
     try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
 
+    if (url.pathname === "/inbox/take") {
+      if (!body || !/^[0-9a-f]{64}$/.test(String(body.token || ""))) return json({ error: "bad token" }, 400);
+      const stub = env.SYNC.get(env.SYNC.idFromName("inbox:" + body.token));
+      const res = await stub.fetch("https://do/inbox/take", { method: "POST", body: "{}" });
+      return new Response(res.body, { status: res.status, headers: { "Content-Type": "application/json", ...cors } });
+    }
     if (url.pathname.startsWith("/sync")) {
       if (!body || !/^[0-9a-f]{64}$/.test(String(body.id || ""))) return json({ error: "bad sync id" }, 400);
       const stub = env.SYNC.get(env.SYNC.idFromName(body.id));
@@ -82,6 +105,8 @@ export class TimerStore {
       if (end > Date.now() + MAX_AHEAD_MS) return this.reply({ error: "too far ahead" }, 400);
       if (!timers[id] && Object.keys(timers).length >= MAX_TIMERS) return this.reply({ error: "too many timers" }, 429);
       timers[id] = { end: Math.max(end, Date.now() + 500), label: String(b.label || "Timer").slice(0, 120) };
+      if (b.title) timers[id].title = String(b.title).slice(0, 80);
+      if (b.url) timers[id].url = String(b.url).slice(0, 200);
     } else if (path === "/cancel") {
       delete timers[String(b.id || "")];
     } else if (path === "/test") {
@@ -100,7 +125,7 @@ export class TimerStore {
       if (t.end > now + 1000) continue;
       delete timers[id];
       if (!sub) continue;
-      const payload = JSON.stringify({ title: "⏰ Timer done", body: t.label, tag: "timer-" + id.replace(/^test-.*/, "test"), id });
+      const payload = JSON.stringify({ title: t.title || "⏰ Timer done", body: t.label, tag: "timer-" + id.replace(/^test-.*/, "test"), id, url: t.url || undefined });
       const status = await sendPush(sub, payload, this.env).catch(e => { console.log("push error", String(e)); return 0; });
       if (status === 404 || status === 410) {                    // phone unsubscribed: forget everything
         await this.ctx.storage.deleteAll();
@@ -122,12 +147,29 @@ export class TimerStore {
 
 export class SyncStore {
   constructor(ctx, env) { this.ctx = ctx; }
+  async alarm() { const list = await this.ctx.storage.get("inbox"); if (list) await this.ctx.storage.deleteAll(); }   // unclaimed health data expires
   reply(obj, status = 200) { return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } }); }
 
   async fetch(req) {
     const path = new URL(req.url).pathname;
     const b = await req.json();
     const st = this.ctx.storage;
+    if (path === "/inbox/put") {
+      // lenient: Shortcuts may send "8,421", "7.5 hr" or "228.4 lb"
+      const num = (v, max) => { const m = String(v ?? "").replace(/,(\d{3})(?!\d)/g, "$1").replace(",", ".").match(/\d+(\.\d+)?/); const n = m ? Number(m[0]) : NaN; return Number.isFinite(n) && n > 0 && n <= max ? Math.round(n * 100) / 100 : undefined; };
+      const e = { at: Date.now(), steps: num(b.steps, 200000), sleep: num(b.sleep, 24), weight: num(b.weight, 2000), water: num(b.water, 100) };
+      if (e.steps === undefined && e.sleep === undefined && e.weight === undefined && e.water === undefined) return this.reply({ error: "nothing to save: send steps, sleep, weight or water" }, 400);
+      const list = ((await st.get("inbox")) || []).filter(x => x.at > Date.now() - 14 * 864e5).slice(-49);
+      list.push(e);
+      await st.put("inbox", list);
+      await st.setAlarm(Date.now() + 14 * 864e5);
+      return this.reply({ ok: true, saved: e });
+    }
+    if (path === "/inbox/take") {
+      const list = (await st.get("inbox")) || [];
+      await st.deleteAll();
+      return this.reply({ items: list });
+    }
     if (path === "/sync/delete") { await st.deleteAll(); await st.put("deleted", true); return this.reply({ ok: true }); }
     if (await st.get("deleted")) return this.reply({ gone: true }, 410);
 
