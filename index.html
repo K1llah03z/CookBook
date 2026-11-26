@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Easy Keto Carnivore Cookbook · 1,000 Recipes</title>
+<meta name="description" content="1,000 easy keto carnivore recipes with search, nutrition per serving, meal planner, shopping list and cook mode. Works offline.">
+<meta name="theme-color" content="#8e2c2c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Carnivore">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="styles.css">
+<script>try{var t=JSON.parse(localStorage.getItem("ekc:v1")||"{}").theme;if(t)document.documentElement.dataset.theme=t;else if(matchMedia("(prefers-color-scheme: dark)").matches)document.documentElement.dataset.theme="dark"}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="#/" aria-label="Easy Keto Carnivore home">
+      <img src="icons/icon-192.png" alt="">
+      <span><b>Easy Keto Carnivore</b><small>1,000 recipes · nutrition · offline</small></span>
+    </a>
+    <div class="search" id="searchWrap">
+      <svg class="mag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <label class="sr" for="q">Search recipes</label>
+      <input id="q" type="search" autocomplete="off" placeholder="Search 1,000 recipes…" enterkeyhint="search">
+      <button class="help" id="searchHelp" type="button" title="Search tips">?</button>
+      <button class="clear" id="qClear" type="button" aria-label="Clear search">×</button>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#/" data-r="home">Recipes</a>
+      <a href="#/mine" data-r="fav">My Recipes <span class="ct" id="favCt"></span></a>
+      <a href="#/plan" data-r="plan">Meal Plan</a>
+      <a href="#/list" data-r="list">Shopping <span class="ct" id="listCt"></span></a>
+      <a href="#/pantry" data-r="pantry">What Can I Make?</a>
+    </nav>
+    <div class="top-actions">
+      <button class="iconbtn" id="timerBtn" title="Kitchen timer" aria-label="Kitchen timer" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6M12 2v3"/></svg><span class="ct tbadge" id="timerCt"></span></button>
+      <button class="iconbtn" id="surprise" title="Surprise me: random recipe" aria-label="Random recipe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/></svg></button>
+      <button class="iconbtn" id="theme" title="Light / dark" aria-label="Toggle dark mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <a class="iconbtn" href="#/settings" title="Goals, backup and settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
+    </div>
+  </div>
+</header>
+<main id="app" tabindex="-1"><p class="muted">Loading recipes…</p></main>
+<footer class="foot">
+  Nutrition is estimated per serving from USDA values for the listed ingredients (optional items not included). General cooking inspiration, not medical advice.
+  <span id="pdfLink"></span> · Your favorites, notes, plans and lists are saved on this device only. Back them up in <a href="#/settings">Settings</a>.
+</footer>
+<div class="timers" id="timers" aria-live="polite"></div>
+<script src="recipes.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

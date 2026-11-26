@@ -1,0 +1,911 @@
+/* Easy Keto Carnivore Cookbook — app
+   Static single-page app: search, filters, recipe view with serving scaler, cook mode + timers,
+   favorites/notes/ratings, meal planner, shopping list, "what can I make", backup. Data in recipes.js. */
+(() => {
+"use strict";
+const D = window.COOKBOOK, M = D.meta, R = D.recipes;
+const byId = new Map(R.map(r => [r.i, r]));
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const app = $("#app");
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const norm = s => String(s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+const color = r => M.colors[r.c];
+const SLOTS = [["B", "Breakfast"], ["L", "Lunch"], ["D", "Dinner"], ["S", "Snack"]];
+const LISTS = [["fav", "Favorites", "♥", "#d64545"], ["want", "Want to try", "☆", "#c9822b"], ["liked", "Tried · liked", "👍", "#3f7a4a"], ["dis", "Tried · didn't like", "👎", "#8a8079"]];
+const inList = (r, l) => l === "fav" ? !!S.fav[r.i] : S.status[r.i] === l;
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+/* ---------- saved state (this device only) ---------- */
+const KEY = "ekc:v1";
+const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, recent: [], plan: {}, list: [], pantry: [],
+  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null });
+let S;
+try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
+let saveT;
+function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full"); } }, 120); counts(); }
+function counts() {
+  const f = Object.keys(S.fav).length, l = S.list.filter(x => !x.done).length;
+  const mine = f + Object.keys(S.status).filter(k => S.status[k] === "want").length;
+  $("#favCt").textContent = mine || ""; $("#favCt").style.display = mine ? "" : "none";
+  $("#listCt").textContent = l || ""; $("#listCt").style.display = l ? "" : "none";
+}
+
+/* ---------- search index ---------- */
+for (const r of R) {
+  r.tot = r.p + r.k;
+  r._t = norm(r.t);
+  r._g = norm(r.g.join(" | "));
+  r._d = norm(r.d.join(" ") + " " + r.x);
+  r._tag = norm([M.cats[r.c], ...r.m.map(i => M.ing[i]), ...r.h.map(i => M.meth[i]),
+    r.b ? "budget cheap" : "", r.tot <= 20 ? "quick fast easy 20 minutes" : "", r.k === 0 ? "no cook" : ""].join(" "));
+}
+const NUMF = /\b(calories|calorie|cals?|kcal|protein|fat|net ?carbs?|carbs?|time|minutes|mins?|serves|servings)\s*(<=|>=|<|>|=)\s*(\d+(?:\.\d+)?)/gi;
+function parseQuery(q) {
+  const out = { inc: [], exc: [], num: [], raw: q.trim() };
+  let s = norm(q).replace(NUMF, (_, k, op, v) => {
+    k = k.replace(/\s/g, "");
+    const f = /^(calories|calorie|cals?|kcal)$/.test(k) ? "kcal" : k === "protein" ? "p" : k === "fat" ? "f" :
+      /carb/.test(k) ? "c" : /^(serves|servings)$/.test(k) ? "s" : "tot";
+    out.num.push([f, op, +v]); return " ";
+  });
+  s = s.replace(/(-?)"([^"]+)"/g, (_, neg, ph) => { (neg ? out.exc : out.inc).push(ph.trim()); return " "; });
+  for (const w of s.split(/\s+/).filter(Boolean)) {
+    if (w.startsWith("-") && w.length > 1) out.exc.push(w.slice(1));
+    else if (!["and", "with", "the", "a", "of", "recipe", "recipes"].includes(w)) out.inc.push(w);
+  }
+  return out;
+}
+const variants = w => { const v = [w]; if (w.length > 3 && w.endsWith("es")) v.push(w.slice(0, -2)); if (w.length > 3 && w.endsWith("s")) v.push(w.slice(0, -1)); return v; };
+const NV = r => ({ kcal: r.n[0], p: r.n[1], f: r.n[2], c: r.n[3], s: r.s, tot: r.tot });
+function cmp(a, op, b) { return op === "<" ? a < b : op === ">" ? a > b : op === "<=" ? a <= b : op === ">=" ? a >= b : a === b; }
+function scoreRecipe(r, pq) {
+  for (const [f, op, v] of pq.num) if (!cmp(NV(r)[f], op, v)) return -1;
+  for (const w of pq.exc) if (r._t.includes(w) || r._g.includes(w) || r._tag.includes(w)) return -1;
+  let sc = 0;
+  for (const w of pq.inc) {
+    let best = 0;
+    for (const v of variants(w)) {
+      if (new RegExp("\\b" + v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(r._t)) best = Math.max(best, 12);
+      else if (r._t.includes(v)) best = Math.max(best, 8);
+      if (r._tag.includes(v)) best = Math.max(best, 5);
+      if (r._g.includes(v)) best = Math.max(best, 4);
+      if (r._d.includes(v)) best = Math.max(best, 1);
+    }
+    if (!best) return -1;
+    sc += best;
+  }
+  if (pq.inc.length && r._t === pq.inc.join(" ")) sc += 30;
+  return sc || 0.5;
+}
+function hl(text, pq) {
+  let h = esc(text);
+  const terms = (pq ? pq.inc : []).filter(t => t.length > 1).sort((a, b) => b.length - a.length);
+  if (!terms.length) return h;
+  const rx = new RegExp("(" + terms.map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  return h.replace(/(<[^>]*>)|([^<]+)/g, (m, tag, txt) => tag || txt.replace(rx, "<mark>$1</mark>"));
+}
+function snippet(r, pq) {
+  if (!pq || !pq.inc.length) return "";
+  const t = pq.inc.find(w => !r._t.includes(w));
+  if (!t) return "";
+  const line = r.g.find(l => norm(l).includes(t)) || [...r.d, r.x].find(l => norm(l).includes(t));
+  return line ? hl(line, pq) : "";
+}
+
+/* ---------- filters ---------- */
+const F = { cats: new Set(), time: 0, meth: new Set(), ing: -1, budget: false, lists: new Set(), hideDis: true, maxK: 1300, minP: 0, maxC: 10, sort: "rel" };
+let Q = "";
+const fActive = () => F.cats.size || F.time || F.meth.size || F.ing >= 0 || F.budget || F.lists.size || F.maxK < 1300 || F.minP > 0 || F.maxC < 10;
+function results() {
+  const pq = parseQuery(Q);
+  let out = [];
+  for (const r of R) {
+    if (F.cats.size && !F.cats.has(r.c)) continue;
+    if (F.time && r.tot > F.time) continue;
+    if (F.meth.size && ![...F.meth].some(m => r.h.includes(m))) continue;
+    if (F.ing >= 0 && !r.m.includes(F.ing)) continue;
+    if (F.budget && !r.b) continue;
+    if (F.lists.size && ![...F.lists].some(l => inList(r, l))) continue;
+    if (F.hideDis && S.status[r.i] === "dis" && !F.lists.has("dis")) continue;
+    if (F.maxK < 1300 && r.n[0] > F.maxK) continue;
+    if (r.n[1] < F.minP) continue;
+    if (F.maxC < 10 && r.n[3] > F.maxC) continue;
+    const sc = scoreRecipe(r, pq);
+    if (sc < 0) continue;
+    out.push([r, sc]);
+  }
+  const by = {
+    rel: (a, b) => b[1] - a[1] || a[0].i - b[0].i,
+    name: (a, b) => a[0].t.localeCompare(b[0].t),
+    kcal: (a, b) => a[0].n[0] - b[0].n[0],
+    prot: (a, b) => b[0].n[1] - a[0].n[1],
+    pcal: (a, b) => b[0].n[1] / Math.max(b[0].n[0], 1) - a[0].n[1] / Math.max(a[0].n[0], 1),
+    carb: (a, b) => a[0].n[3] - b[0].n[3],
+    time: (a, b) => a[0].tot - b[0].tot,
+    rate: (a, b) => (S.rating[b[0].i] || 0) - (S.rating[a[0].i] || 0),
+  }[F.sort] || ((a, b) => a[0].i - b[0].i);
+  out.sort(by);
+  return { list: out.map(x => x[0]), pq };
+}
+
+/* ---------- formatting ---------- */
+const fmtT = m => m === 0 ? "No cook" : m < 60 ? m + " min" : Math.floor(m / 60) + " hr" + (m % 60 ? " " + (m % 60) + " min" : "");
+const fmtK = k => String(k < 50 ? Math.round(k / 5) * 5 : Math.round(k / 10) * 10);
+const fmtC = c => c < 0.5 ? "0 g" : c < 1 ? "<1 g" : Math.round(c) + " g";
+const FR = [[0, ""], [1 / 8, "1/8"], [1 / 4, "1/4"], [1 / 3, "1/3"], [3 / 8, "3/8"], [1 / 2, "1/2"], [5 / 8, "5/8"], [2 / 3, "2/3"], [3 / 4, "3/4"], [7 / 8, "7/8"], [1, ""]];
+function fmtQ(x) {
+  if (x >= 20) return String(Math.round(x));
+  if (x >= 5 && Math.abs(x - Math.round(x)) > 0.12 && Math.abs(x * 2 - Math.round(x * 2)) < 0.12) return String(Math.round(x * 2) / 2);
+  let w = Math.floor(x), f = x - w, best = FR[0];
+  for (const fr of FR) if (Math.abs(fr[0] - f) < Math.abs(best[0] - f)) best = fr;
+  if (best[0] === 1) { w += 1; best = FR[0]; }
+  if (!w && !best[1]) return x > 0 ? "1/8" : "0";
+  return (w ? w : "") + (w && best[1] ? " " : "") + best[1];
+}
+const QRX = /^(\d+(?:\.\d+)?(?:\/\d+)?)(?:\s+to\s+(\d+(?:\.\d+)?(?:\/\d+)?))?\s+/;
+const num = s => s.includes("/") ? s.split("/")[0] / s.split("/")[1] : +s;
+function scaleLine(line, k) {
+  const m = line.match(QRX);
+  if (!m) return { q: "", rest: line };
+  if (k === 1) return { q: m[0].trim(), rest: line.slice(m[0].length) };
+  const a = fmtQ(num(m[1]) * k), b = m[2] ? fmtQ(num(m[2]) * k) : "";
+  return { q: a + (b && b !== a ? " to " + b : ""), rest: line.slice(m[0].length) };
+}
+
+/* ---------- small UI helpers ---------- */
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 2400);
+}
+function modal(html, onMount) {
+  const bg = document.createElement("div"); bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
+  const close = () => { bg.remove(); document.removeEventListener("keydown", key); };
+  const key = e => { if (e.key === "Escape") close(); };
+  bg.addEventListener("click", e => { if (e.target === bg || e.target.closest("[data-close]")) close(); });
+  document.addEventListener("keydown", key);
+  document.body.appendChild(bg);
+  onMount && onMount($(".modal", bg), close);
+  const f = $("input,select,button", bg); f && f.focus();
+  return close;
+}
+const ICON = {
+  heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
+  cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+  cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6"/></svg>',
+  chef: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 13.9A4 4 0 0 1 7.5 6a5 5 0 0 1 9 0A4 4 0 0 1 18 13.9V21H6z"/><path d="M6 17h12"/></svg>',
+  print: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>',
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>',
+  filter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 3H2l8 9.5V19l4 2v-8.5z"/></svg>',
+};
+function statusPill(id) {
+  const st = S.status[id]; if (!st) return "";
+  const L = LISTS.find(x => x[0] === st);
+  return `<span class="pill st-${st}" data-st="${id}">${L[2]} ${esc(L[1])}</span>`;
+}
+function card(r, pq) {
+  const sn = snippet(r, pq);
+  return `<a class="card" href="#/r/${r.i}">
+    <div class="band" style="background:${color(r)}"></div>
+    <div class="body">
+      <div class="cat" style="color:${color(r)}">${esc(M.cats[r.c])} · #${r.i}</div>
+      <h3>${hl(r.t, pq)}</h3>
+      ${sn ? `<div class="snip">…${sn}</div>` : ""}
+      <div class="meta"><span class="pill">${fmtT(r.tot)}</span><span class="pill">${fmtK(r.n[0])} cal</span><span class="pill">${r.n[1]} g protein</span><span class="pill">${fmtC(r.n[3])} carbs</span>${S.rating[r.i] ? `<span class="pill" style="color:#b88700">${"★".repeat(S.rating[r.i])}</span>` : ""}${statusPill(r.i)}</div>
+    </div>
+    <button class="heart ${S.fav[r.i] ? "on" : ""}" data-fav="${r.i}" aria-label="Favorite" title="Favorite">${ICON.heart}</button>
+  </a>`;
+}
+document.addEventListener("click", e => {
+  const h = e.target.closest("[data-fav]");
+  if (!h) return;
+  e.preventDefault(); e.stopPropagation();
+  const id = +h.dataset.fav;
+  if (S.fav[id]) delete S.fav[id]; else S.fav[id] = Date.now();
+  save(); $$(`[data-fav="${id}"]`).forEach(b => b.classList.toggle("on", !!S.fav[id]));
+  if (h.classList.contains("btn")) h.innerHTML = ICON.heart + (S.fav[id] ? " Saved" : " Favorite");
+});
+function grid(list, pq, el, step = 48) {
+  let shown = 0;
+  const g = document.createElement("div"); g.className = "grid";
+  const more = document.createElement("div"); more.className = "more";
+  el.append(g, more);
+  const add = () => {
+    g.insertAdjacentHTML("beforeend", list.slice(shown, shown + step).map(r => card(r, pq)).join(""));
+    shown += step;
+    more.innerHTML = shown < list.length ? `<button class="btn">Show more (${list.length - shown} left)</button>` : "";
+  };
+  more.addEventListener("click", add);
+  add();
+  if ("IntersectionObserver" in window) {
+    const io = new IntersectionObserver(es => { if (es[0].isIntersecting && shown < list.length) add(); }, { rootMargin: "600px" });
+    io.observe(more);
+  }
+}
+
+/* ---------- views ---------- */
+function setTab(name) { $$("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.r === name)); }
+
+function viewBrowse(opts = {}) {
+  setTab("home");
+  const { list, pq } = results();
+  const showHero = !Q && !fActive() && !opts.fav;
+  app.innerHTML = `
+  ${showHero ? `<div class="hero">${M.cats.map((c, i) => `<a href="#/" data-cat="${i}" style="background:${M.colors[i]}"><b>${esc(c)}</b><span>${R.filter(r => r.c === i).length} recipes</span></a>`).join("")}</div>` : ""}
+  <div class="browse">
+    <aside class="filters" id="filters" aria-label="Filters">${filtersHTML()}</aside>
+    <section>
+      <div class="resbar">
+        <h2>${opts.fav ? "Favorites" : Q ? `Results for “${esc(Q)}”` : "All recipes"} <span class="muted" style="font:600 15px var(--sans)">${list.length.toLocaleString()}</span></h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn sm showfilters" id="showF">${ICON.filter} Filters${fActive() ? " •" : ""}</button>
+          <label class="sr" for="sort">Sort</label>
+          <select class="inp" id="sort" style="width:auto">
+            ${[["rel", Q ? "Best match" : "Cookbook order"], ["name", "Name A–Z"], ["time", "Quickest"], ["kcal", "Fewest calories"], ["prot", "Most protein"], ["pcal", "Most protein per calorie"], ["carb", "Fewest net carbs"], ["rate", "My ratings"]]
+              .map(([v, t]) => `<option value="${v}" ${F.sort === v ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="active-f">${activeChips()}</div>
+      <div id="res"></div>
+    </section>
+  </div>`;
+  const res = $("#res");
+  if (!list.length) {
+    res.innerHTML = opts.fav && !Object.keys(S.fav).length
+      ? `<div class="empty"><b>No favorites yet</b>Tap the heart on any recipe to save it here.</div>`
+      : `<div class="empty"><b>No recipes match</b>Try fewer words, or clear a filter.</div>`;
+  } else grid(list, pq, res);
+  if (opts.fav) {
+    const made = Object.keys(S.made).map(Number).filter(i => byId.get(i)).sort((a, b) => S.made[b].slice(-1)[0] - S.made[a].slice(-1)[0]);
+    const recent = S.recent.map(i => byId.get(i)).filter(Boolean).slice(0, 12);
+    if (made.length) { res.insertAdjacentHTML("beforeend", `<h2 style="margin-top:26px">I made these</h2>`); grid(made.map(i => byId.get(i)), null, res); }
+    if (recent.length) { res.insertAdjacentHTML("beforeend", `<h2 style="margin-top:26px">Recently viewed</h2>`); grid(recent, null, res); }
+  }
+  bindFilters(opts);
+}
+function filtersHTML() {
+  const ch = (on, attr, label, dot) => `<button class="chip ${on ? "on" : ""}" ${attr}>${dot ? `<span class="dot" style="background:${dot}"></span>` : ""}${label}</button>`;
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center"><h4>Category</h4><button class="btn sm showfilters" data-closef>Done</button></div>
+    <div class="chips">${M.cats.map((c, i) => ch(F.cats.has(i), `data-c="${i}"`, esc(c), M.colors[i])).join("")}</div>
+    <h4>Total time</h4>
+    <div class="chips">${[[0, "Any"], [20, "≤ 20 min"], [45, "≤ 45 min"], [90, "≤ 90 min"]].map(([v, t]) => ch(F.time === v, `data-t="${v}"`, t)).join("")}</div>
+    <h4>Main ingredient</h4>
+    <select class="inp" id="fIng"><option value="-1">Any</option>${M.ing.map((g, i) => `<option value="${i}" ${F.ing === i ? "selected" : ""}>${esc(g)}</option>`).join("")}</select>
+    <h4>Cooking method</h4>
+    <div class="chips">${M.meth.map((m, i) => ch(F.meth.has(i), `data-m="${i}"`, esc(m))).join("")}</div>
+    <h4>Nutrition per serving</h4>
+    <div class="range"><span>Max calories</span><output id="oK">${F.maxK >= 1300 ? "Any" : F.maxK}</output><input type="range" id="fK" min="100" max="1300" step="50" value="${F.maxK}"></div>
+    <div class="range"><span>Min protein</span><output id="oP">${F.minP ? F.minP + " g" : "Any"}</output><input type="range" id="fP" min="0" max="100" step="5" value="${F.minP}"></div>
+    <div class="range"><span>Max net carbs</span><output id="oC">${F.maxC >= 10 ? "Any" : F.maxC + " g"}</output><input type="range" id="fC" min="0" max="10" step="1" value="${F.maxC}"></div>
+    <h4>My lists</h4>
+    <div class="chips">${LISTS.map(([k, t, ic]) => ch(F.lists.has(k), `data-l="${k}"`, `${ic} ${esc(t)}`)).join("")}</div>
+    <label class="check" style="margin-top:6px"><input type="checkbox" id="fHD" ${F.hideDis ? "checked" : ""}> Hide recipes I didn't like</label>
+    <h4>More</h4>
+    <label class="check"><input type="checkbox" id="fB" ${F.budget ? "checked" : ""}> Budget picks</label>
+    <button class="btn sm" id="fReset" style="margin-top:12px;width:100%;justify-content:center">Clear all filters</button>`;
+}
+function activeChips() {
+  const c = [];
+  F.cats.forEach(i => c.push([`c${i}`, M.cats[i]]));
+  if (F.time) c.push(["t", `≤ ${F.time} min`]);
+  F.meth.forEach(i => c.push([`m${i}`, M.meth[i]]));
+  if (F.ing >= 0) c.push(["i", M.ing[F.ing]]);
+  if (F.maxK < 1300) c.push(["k", `≤ ${F.maxK} cal`]);
+  if (F.minP) c.push(["p", `≥ ${F.minP} g protein`]);
+  if (F.maxC < 10) c.push(["cc", `≤ ${F.maxC} g carbs`]);
+  if (F.budget) c.push(["b", "Budget"]);
+  F.lists.forEach(l => c.push(["l" + l, LISTS.find(x => x[0] === l)[1]]));
+  return c.map(([k, t]) => `<button class="chip" data-x="${k}">${esc(t)} ×</button>`).join("");
+}
+function bindFilters(opts) {
+  const fl = $("#filters"), rerender = () => { saveF(); viewBrowse(opts); };
+  $$(".hero [data-cat]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); F.cats = new Set([+a.dataset.cat]); rerender(); }));
+  $$("[data-c]", fl).forEach(b => b.onclick = () => { const i = +b.dataset.c; F.cats.has(i) ? F.cats.delete(i) : F.cats.add(i); rerender(); });
+  $$("[data-t]", fl).forEach(b => b.onclick = () => { F.time = +b.dataset.t; rerender(); });
+  $$("[data-m]", fl).forEach(b => b.onclick = () => { const i = +b.dataset.m; F.meth.has(i) ? F.meth.delete(i) : F.meth.add(i); rerender(); });
+  $("#fIng").onchange = e => { F.ing = +e.target.value; rerender(); };
+  const live = (id, out, f) => { const el = $(id); el.oninput = () => { f(+el.value); $(out).textContent = el.id === "fK" ? (el.value >= 1300 ? "Any" : el.value) : el.id === "fP" ? (+el.value ? el.value + " g" : "Any") : (el.value >= 10 ? "Any" : el.value + " g"); }; el.onchange = rerender; };
+  live("#fK", "#oK", v => F.maxK = v); live("#fP", "#oP", v => F.minP = v); live("#fC", "#oC", v => F.maxC = v);
+  $("#fB").onchange = e => { F.budget = e.target.checked; rerender(); };
+  $$("[data-l]", fl).forEach(b => b.onclick = () => { const l = b.dataset.l; F.lists.has(l) ? F.lists.delete(l) : F.lists.add(l); rerender(); });
+  $("#fHD").onchange = e => { F.hideDis = e.target.checked; rerender(); };
+  $("#fReset").onclick = () => { Object.assign(F, { cats: new Set(), time: 0, meth: new Set(), ing: -1, budget: false, lists: new Set(), hideDis: true, maxK: 1300, minP: 0, maxC: 10 }); rerender(); };
+  $("#sort").onchange = e => { F.sort = e.target.value; rerender(); };
+  $$(".active-f [data-x]").forEach(b => b.onclick = () => {
+    const k = b.dataset.x;
+    if (k[0] === "c" && k !== "cc") F.cats.delete(+k.slice(1)); else if (k[0] === "m") F.meth.delete(+k.slice(1)); else if (k[0] === "l") F.lists.delete(k.slice(1));
+    else ({ t: () => F.time = 0, i: () => F.ing = -1, k: () => F.maxK = 1300, p: () => F.minP = 0, cc: () => F.maxC = 10, b: () => F.budget = false })[k]();
+    rerender();
+  });
+  const sf = $("#showF"); if (sf) sf.onclick = () => fl.classList.add("open");
+  $$("[data-closef]", fl).forEach(b => b.onclick = () => fl.classList.remove("open"));
+}
+function saveF() { try { sessionStorage.setItem("ekc:f", JSON.stringify({ ...F, cats: [...F.cats], meth: [...F.meth], lists: [...F.lists] })); } catch (e) {} }
+try { const f = JSON.parse(sessionStorage.getItem("ekc:f") || "null"); if (f) Object.assign(F, f, { cats: new Set(f.cats), meth: new Set(f.meth), lists: new Set(f.lists || []) }); } catch (e) {}
+
+/* ---------- my recipes (lists) ---------- */
+function viewMine(tab) {
+  setTab("fav");
+  const tabs = [...LISTS, ["made", "Cooked", "✓", "#3f7a4a"], ["recent", "Recently viewed", "🕘", "#6e625b"]];
+  tab = tabs.some(t => t[0] === tab) ? tab : "fav";
+  const lists = {
+    made: Object.keys(S.made).map(Number).filter(i => byId.get(i)).sort((a, b) => S.made[b].slice(-1)[0] - S.made[a].slice(-1)[0]).map(i => byId.get(i)),
+    recent: S.recent.map(i => byId.get(i)).filter(Boolean),
+    fav: R.filter(r => S.fav[r.i]).sort((a, b) => S.fav[b.i] - S.fav[a.i]),
+  };
+  const list = lists[tab] || R.filter(r => S.status[r.i] === tab);
+  const n = k => (lists[k] || R.filter(r => S.status[r.i] === k)).length;
+  const empty = { fav: "Tap the heart on any recipe to save it here.", want: "On a recipe page, tap “☆ Want to try” to build your to-cook list.",
+    liked: "After you cook something, mark it “👍 Tried · liked”.", dis: "Recipes you mark “👎 Tried · didn't like” land here and are hidden from browsing and auto-fill.",
+    made: "Tap “✓ I made this” on a recipe (or finish Cook mode) to log it.", recent: "Recipes you open show up here." }[tab];
+  app.innerHTML = `<h1 style="margin:0 0 10px">My recipes</h1>
+    <div class="chips" style="margin-bottom:16px">${tabs.map(([k, t, ic]) => `<a class="chip ${k === tab ? "on" : ""}" href="#/mine/${k}" style="text-decoration:none">${ic} ${esc(t)} <span class="muted">${n(k)}</span></a>`).join("")}</div>
+    ${tab === "want" && list.length ? `<p style="margin-top:-6px"><button class="btn sm" id="wantPlan">${ICON.cal} Put want-to-try recipes in my meal plan</button></p>` : ""}
+    <div id="mineRes"></div>`;
+  if (!list.length) $("#mineRes").innerHTML = `<div class="empty"><b>Nothing here yet</b>${empty}</div>`;
+  else grid(list, null, $("#mineRes"));
+  if ($("#wantPlan")) $("#wantPlan").onclick = () => {
+    const q = list.slice(); let added = 0;
+    for (let d = 0; d < 7 && q.length; d++) for (const [s] of SLOTS) {
+      if (!q.length || planItems(d, s).length) continue;
+      const ix = q.findIndex(r => s === "B" ? r.c === 0 : s === "S" ? r.c >= 5 : r.c > 0 && r.c < 5);
+      if (ix < 0) continue;
+      ((S.plan[d] = S.plan[d] || {})[s] = []).push(q.splice(ix, 1)[0].i); added++;
+    }
+    save(); toast(added ? `Added ${added} to empty meals` : "No empty meals left that fit"); location.hash = "#/plan";
+  };
+}
+
+/* ---------- recipe ---------- */
+const TRX = /(\d+(?:\.\d+)?)(?:\s*(?:to|-)\s*(\d+(?:\.\d+)?))?\s*(minutes?|mins?|hours?|hrs?)\b/gi;
+function stepHTML(s, label) {
+  let out = "", last = 0;
+  s.replace(TRX, (m, a, b, u, off) => {
+    const sec = Math.round(+a * (/^h/i.test(u) ? 3600 : 60));
+    out += esc(s.slice(last, off)) + esc(m) + (sec > 0 && sec <= 172800 ? ` <button class="tbtn no-print" data-timer="${sec}" data-label="${esc(label)}" title="Start a ${esc(m)} timer">⏱ ${fmtT(Math.round(sec / 60)).replace("No cook", "<1 min")}</button>` : "");
+    last = off + m.length;
+  });
+  return out + esc(s.slice(last));
+}
+let curServ = {};
+function viewRecipe(id) {
+  const r = byId.get(id);
+  if (!r) { app.innerHTML = `<div class="empty"><b>Recipe not found</b><a href="#/">Back to recipes</a></div>`; return; }
+  setTab("");
+  S.recent = [id, ...S.recent.filter(x => x !== id)].slice(0, 30); save();
+  const serv = curServ[id] || r.s, k = serv / r.s, c = color(r);
+  const { list } = results();
+  const pos = list.findIndex(x => x.i === id);
+  const prev = pos > 0 ? list[pos - 1] : byId.get(id - 1), next = pos >= 0 && pos < list.length - 1 ? list[pos + 1] : byId.get(id + 1);
+  const made = S.made[id] || [];
+  const sim = similar(r);
+  app.innerHTML = `
+  <article class="recipe" style="--c:${c}">
+    <div class="r-nav no-print">
+      <a class="btn sm" href="#/" id="backBtn">← Back</a>
+      <span>${prev ? `<a class="btn sm" href="#/r/${prev.i}" title="${esc(prev.t)}">‹ Prev</a>` : ""} ${next ? `<a class="btn sm" href="#/r/${next.i}" title="${esc(next.t)}">Next ›</a>` : ""}</span>
+    </div>
+    <div class="r-head" style="background:${c}">
+      <div class="kicker">${esc(M.cats[r.c])} · Recipe ${r.i}${r.b ? " · Budget pick" : ""}</div>
+      <h1>${esc(r.t)}</h1>
+    </div>
+    <div class="facts">
+      <div class="fact"><small>Prep</small><b>${fmtT(r.p).replace("No cook", "None")}</b></div>
+      <div class="fact"><small>Cook</small><b>${fmtT(r.k).replace("No cook", "None")}</b></div>
+      <div class="fact"><small>Total</small><b>${fmtT(r.tot)}</b></div>
+      <div class="fact"><small>Serves</small><b>${serv}</b></div>
+    </div>
+    <div class="nut">
+      <div class="lbl">Nutrition per serving<br><span style="font-weight:600;text-transform:none;letter-spacing:0">estimated${r.u ? ", " + esc(r.u) : ""}</span></div>
+      <div class="v"><b>${fmtK(r.n[0])}</b><span>Calories</span></div>
+      <div class="v"><b>${r.n[1]} g</b><span>Protein</span></div>
+      <div class="v"><b>${r.n[2]} g</b><span>Fat</span></div>
+      <div class="v"><b>${fmtC(r.n[3])}</b><span>Net carbs</span></div>
+    </div>
+    <div class="r-actions no-print">
+      <button class="btn primary" id="cookBtn">${ICON.chef} Cook mode</button>
+      <button class="btn ${S.fav[id] ? "on" : ""}" data-fav="${id}">${ICON.heart} ${S.fav[id] ? "Saved" : "Favorite"}</button>
+      <button class="btn" id="planBtn">${ICON.cal} Add to plan</button>
+      <button class="btn" id="timerBtn2">⏱ Timer</button>
+      <button class="btn" id="listBtn">${ICON.cart} Add to shopping list</button>
+      <button class="btn" id="printBtn">${ICON.print} Print</button>
+      <button class="btn" id="shareBtn">${ICON.share} Share</button>
+    </div>
+    <div class="status-row no-print" role="group" aria-label="My list">
+      <span class="muted" style="font-size:13px;font-weight:700">My list:</span>
+      ${LISTS.slice(1).map(([k, t, ic]) => `<button class="seg ${S.status[id] === k ? "on st-" + k : ""}" data-set="${k}">${ic} ${esc(t)}</button>`).join("")}
+    </div>
+    <div class="r-cols">
+      <div class="box">
+        <h3 style="color:${c}">Ingredients</h3>
+        <div class="scaler">Servings <button id="sMinus" aria-label="Fewer servings">−</button><b id="sNum">${serv}</b><button id="sPlus" aria-label="More servings">+</button>${k !== 1 ? `<button class="btn sm" id="sReset" style="border-radius:8px;width:auto;height:auto">Reset</button>` : ""}</div>
+        <ul class="ings">${r.g.map((g, i) => { const s = scaleLine(g, k); return `<li><input type="checkbox" id="g${i}" aria-label="Got it"><span>${s.q ? `<span class="q">${esc(s.q)}</span> ` : ""}${esc(s.rest)}</span></li>`; }).join("")}</ul>
+        ${k !== 1 ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">Amounts scaled ×${(+k.toFixed(2))}. Cook times stay about the same; larger roasts may need longer.</p>` : ""}
+      </div>
+      <div>
+        <div class="box">
+          <h3 style="color:${c}">Directions</h3>
+          <ol class="steps">${r.d.map(s => `<li><div>${stepHTML(s, r.t)}</div></li>`).join("")}</ol>
+          ${r.x ? `<div class="tip"><b>TIP</b> ${esc(r.x)}</div>` : ""}
+        </div>
+        <div class="box notes" style="margin-top:14px">
+          <h3>My notes</h3>
+          <textarea id="notes" placeholder="Tweaks, brands, how long it really took…">${esc(S.notes[id] || "")}</textarea>
+          <div class="made">
+            <div class="stars" role="radiogroup" aria-label="My rating">${[1, 2, 3, 4, 5].map(n => `<button data-star="${n}" class="${(S.rating[id] || 0) >= n ? "on" : ""}" aria-label="${n} stars">★</button>`).join("")}</div>
+            <button class="btn sm" id="madeBtn">✓ I made this</button>
+            <span class="muted">${made.length ? `Made ${made.length}× · last ${new Date(made[made.length - 1]).toLocaleDateString()}` : "Not made yet"}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    ${sim.length ? `<section class="similar no-print"><h2>You might also like</h2><div class="grid">${sim.map(x => card(x)).join("")}</div></section>` : ""}
+  </article>`;
+  window.scrollTo(0, 0);
+  const setServ = v => { curServ[id] = Math.max(1, Math.min(48, v)); viewRecipe(id); };
+  $("#sMinus").onclick = () => setServ(serv - 1);
+  $("#sPlus").onclick = () => setServ(serv + 1);
+  if ($("#sReset")) $("#sReset").onclick = () => { delete curServ[id]; viewRecipe(id); };
+  $$("ul.ings li").forEach(li => li.addEventListener("click", e => { const cb = $("input", li); if (e.target !== cb) cb.checked = !cb.checked; li.classList.toggle("got", cb.checked); }));
+  let nt; $("#notes").oninput = e => { clearTimeout(nt); nt = setTimeout(() => { const v = e.target.value.trim(); if (v) S.notes[id] = e.target.value; else delete S.notes[id]; save(); }, 300); };
+  $$("[data-star]").forEach(b => b.onclick = () => { const n = +b.dataset.star; if (S.rating[id] === n) delete S.rating[id]; else S.rating[id] = n; save(); viewRecipe(id); });
+  $$("[data-set]").forEach(b => b.onclick = () => { const k = b.dataset.set; if (S.status[id] === k) delete S.status[id]; else S.status[id] = k; save(); viewRecipe(id); toast(S.status[id] ? "Saved to “" + LISTS.find(x => x[0] === k)[1] + "”" : "Removed from your list"); });
+  $("#madeBtn").onclick = () => logMade(id);
+  $("#timerBtn2").onclick = () => timerDialog(r.t);
+  $("#cookBtn").onclick = () => cookMode(r, k);
+  $("#planBtn").onclick = () => addToPlanDialog(id);
+  $("#listBtn").onclick = () => { addToList([[r, k]]); toast(`Added ${r.g.length} ingredients to your shopping list`); };
+  $("#printBtn").onclick = () => window.print();
+  $("#shareBtn").onclick = async () => {
+    const url = location.href.split("#")[0] + "#/r/" + id;
+    const text = `${r.t}\n\nIngredients:\n${r.g.map(g => "• " + g).join("\n")}\n\nDirections:\n${r.d.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n${url}`;
+    try { if (navigator.share) await navigator.share({ title: r.t, text, url }); else { await navigator.clipboard.writeText(text); toast("Recipe copied to clipboard"); } } catch (e) {}
+  };
+  $("#backBtn").onclick = e => { if (history.length > 1 && lastRoute && !lastRoute.startsWith("#/r/")) { e.preventDefault(); history.back(); } };
+}
+function logMade(id) {
+  (S.made[id] = S.made[id] || []).push(Date.now()); save();
+  const onPage = () => location.hash === "#/r/" + id;
+  if (onPage()) viewRecipe(id);
+  if (S.status[id] === "liked" || S.status[id] === "dis") { toast("Nice! Logged it."); return; }
+  modal(`<h3>How was ${esc(byId.get(id).t)}?</h3><p class="muted" style="margin-top:0">Logged as cooked. Want to file it in your lists?</p>
+    <div class="row" style="justify-content:flex-start"><button class="btn" data-how="liked">👍 Liked it</button><button class="btn" data-how="dis">👎 Didn't like it</button><button class="btn" data-close>Skip</button></div>`, (m, close) => {
+    $$("[data-how]", m).forEach(b => b.onclick = () => { S.status[id] = b.dataset.how; save(); close(); toast("Saved to your lists"); if (onPage()) viewRecipe(id); });
+  });
+}
+function similar(r) {
+  const sc = R.filter(x => x.i !== r.i).map(x => {
+    let s = 0;
+    for (const m of x.m) if (r.m.includes(m)) s += 3;
+    for (const h of x.h) if (r.h.includes(h)) s += 1;
+    if (x.c === r.c) s += 2;
+    s -= Math.abs(x.n[0] - r.n[0]) / 400;
+    return [x, s];
+  }).sort((a, b) => b[1] - a[1]);
+  const seed = r.i * 7;
+  return sc.slice(0, 14).sort((a, b) => ((a[0].i * seed) % 13) - ((b[0].i * seed) % 13)).slice(0, 6).map(x => x[0]);
+}
+
+/* ---------- cook mode ---------- */
+let wakeLock = null;
+function cookMode(r, k) {
+  let i = 0;
+  const el = document.createElement("div"); el.className = "cook"; el.setAttribute("role", "dialog");
+  document.body.appendChild(el); document.body.style.overflow = "hidden";
+  if ("wakeLock" in navigator) navigator.wakeLock.request("screen").then(w => { wakeLock = w; }).catch(() => {});
+  const draw = () => {
+    el.innerHTML = `
+      <div class="cook-top"><b>${esc(r.t)}</b><span style="display:flex;gap:8px"><button class="btn sm" id="ckIng">Ingredients</button><button class="btn sm" id="ckX">Exit ✕</button></span></div>
+      <div class="cook-body">
+        <div class="cook-ings" id="ckList"><h3 style="margin-top:0">Ingredients</h3><ul class="ings">${r.g.map(g => { const s = scaleLine(g, k); return `<li><input type="checkbox"><span>${s.q ? `<span class="q">${esc(s.q)}</span> ` : ""}${esc(s.rest)}</span></li>`; }).join("")}</ul></div>
+        <div class="cook-step"><div class="n">Step ${i + 1} of ${r.d.length}</div><p>${stepHTML(r.d[i], r.t)}</p>${i === r.d.length - 1 && r.x ? `<div class="tip" style="--c:${color(r)}"><b>TIP</b> ${esc(r.x)}</div>` : ""}</div>
+      </div>
+      <div class="cook-nav"><button class="btn" id="ckPrev" ${i ? "" : "disabled"}>‹ Back</button><div class="dots">${r.d.map((_, j) => `<i class="${j === i ? "on" : ""}"></i>`).join("")}</div>
+      ${i < r.d.length - 1 ? `<button class="btn primary" id="ckNext">Next ›</button>` : `<button class="btn primary" id="ckDone">Done ✓</button>`}</div>`;
+    $("#ckX", el).onclick = close; $("#ckIng", el).onclick = () => $("#ckList", el).classList.toggle("open");
+    if ($("#ckPrev", el)) $("#ckPrev", el).onclick = () => { if (i) { i--; draw(); } };
+    if ($("#ckNext", el)) $("#ckNext", el).onclick = () => { i++; draw(); };
+    if ($("#ckDone", el)) $("#ckDone", el).onclick = () => { close(); logMade(r.i); };
+    $$("li", el).forEach(li => li.onclick = e => { const cb = $("input", li); if (e.target !== cb) cb.checked = !cb.checked; li.classList.toggle("got", cb.checked); });
+  };
+  const key = e => { if (e.key === "ArrowRight" || e.key === " ") { if (i < r.d.length - 1) { i++; draw(); } e.preventDefault(); } else if (e.key === "ArrowLeft") { if (i) { i--; draw(); } } else if (e.key === "Escape") close(); };
+  function close() { el.remove(); document.body.style.overflow = ""; document.removeEventListener("keydown", key); try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+  document.addEventListener("keydown", key);
+  let sx = null; el.addEventListener("touchstart", e => sx = e.touches[0].clientX, { passive: true });
+  el.addEventListener("touchend", e => { if (sx == null) return; const dx = e.changedTouches[0].clientX - sx; if (Math.abs(dx) > 60) { if (dx < 0 && i < r.d.length - 1) i++; else if (dx > 0 && i) i--; draw(); } sx = null; });
+  draw();
+}
+
+/* ---------- timers: step timers + a standalone kitchen timer, saved across reloads ---------- */
+let tTick = null, audio = null;
+const T = S.timers;                       // [{id,end,left,paused,label,done,notified}]
+function timersFromState() { const saved = [...(S.timers || [])]; T.length = 0; saved.forEach(t => T.push(t)); S.timers = T; drawTimers(); if (T.length && !tTick) tTick = setInterval(drawTimers, 500); }
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-timer]"); if (!b) return;
+  e.preventDefault();
+  startTimer(+b.dataset.timer, b.dataset.label + " · " + b.textContent.replace("⏱", "").trim());
+});
+function unlockSound() { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {} }
+function askNotify() { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().then(() => drawTimers()).catch(() => {}); }
+function startTimer(sec, label) {
+  unlockSound(); askNotify();
+  T.push({ id: Date.now() + Math.random(), end: Date.now() + sec * 1000, left: sec * 1000, paused: false, label: label || "Timer", done: false, notified: false });
+  save(); drawTimers(); if (!tTick) tTick = setInterval(drawTimers, 500);
+  toast("Timer started");
+}
+function beep() {
+  if (!audio || audio.state !== "running") return;
+  const t0 = audio.currentTime;
+  for (let n = 0; n < 3; n++) { const o = audio.createOscillator(), g = audio.createGain(); o.frequency.value = 880; o.connect(g); g.connect(audio.destination); g.gain.setValueAtTime(0.0001, t0 + n * 0.35); g.gain.exponentialRampToValueAtTime(0.4, t0 + n * 0.35 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + n * 0.35 + 0.25); o.start(t0 + n * 0.35); o.stop(t0 + n * 0.35 + 0.3); }
+}
+async function notify(t) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const opts = { body: t.label, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "timer-" + t.id, renotify: true, requireInteraction: true, vibrate: [400, 200, 400, 200, 400] };
+  try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg) return reg.showNotification("⏰ Timer done", opts); } catch (e) {}
+  try { new Notification("⏰ Timer done", opts); } catch (e) {}
+}
+const baseTitle = document.title;
+function drawTimers() {
+  const box = $("#timers"), now = Date.now();
+  let anyDone = false;
+  for (const t of T) {
+    if (!t.paused) t.left = t.end - now;
+    if (t.left <= 0 && !t.done) { t.done = true; save(); }
+    if (t.done) {
+      anyDone = true;
+      if (!t.notified) { t.notified = true; save(); notify(t); beep(); try { navigator.vibrate && navigator.vibrate([400, 200, 400, 200, 400]); } catch (e) {} }
+      else if (Math.floor((now - t.end) / 500) % 12 === 0) beep();
+    }
+  }
+  document.title = anyDone ? "⏰ Timer done! · " + baseTitle : baseTitle;
+  const tb = $("#timerCt"); if (tb) { tb.textContent = T.length || ""; tb.style.display = T.length ? "" : "none"; }
+  const fmt = t => { const l = Math.max(0, Math.ceil(t.left / 1000)), h = Math.floor(l / 3600), m = Math.floor(l % 3600 / 60), s = l % 60; return t.done ? "Done!" : (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
+  const perm = "Notification" in window ? Notification.permission : "na";
+  const sig = T.map(t => t.id + (t.done ? "d" : "") + (t.paused ? "p" : "")).join(",") + perm;
+  if (sig !== box.dataset.sig) {        // rebuild only when timers are added/removed/paused/finished, so taps never hit a replaced button
+    box.dataset.sig = sig;
+    box.innerHTML = T.map(t => `<div class="timer ${t.done ? "done" : ""}"><div style="flex:1"><b data-tt="${t.id}">${fmt(t)}</b><small>${esc(t.label)}</small></div>
+      ${t.done ? `<button data-tadd="${t.id}" title="Snooze 1 minute">+1 min</button>` : `<button data-tadd="${t.id}" title="Add 1 minute">+1</button><button data-tp="${t.id}" aria-label="${t.paused ? "Resume" : "Pause"}">${t.paused ? "▶" : "❚❚"}</button>`}<button data-tx="${t.id}" aria-label="Stop timer">✕</button></div>`).join("")
+      + (T.length && perm === "default" ? `<button class="btn sm" id="tAllow" style="align-self:flex-end">🔔 Allow timer alerts</button>` : "");
+  } else for (const t of T) { const el = box.querySelector(`[data-tt="${t.id}"]`); if (el && el.textContent !== fmt(t)) el.textContent = fmt(t); }
+  if (!T.length) { clearInterval(tTick); tTick = null; }
+}
+$("#timers").addEventListener("click", e => {
+  const p = e.target.closest("[data-tp]"), x = e.target.closest("[data-tx]"), a = e.target.closest("[data-tadd]");
+  unlockSound();
+  if (e.target.id === "tAllow") askNotify();
+  if (p) { const t = T.find(t => t.id == p.dataset.tp); t.paused = !t.paused; if (!t.paused) t.end = Date.now() + t.left; }
+  if (a) { const t = T.find(t => t.id == a.dataset.tadd); if (t.done) { t.done = false; t.notified = false; t.end = Date.now() + 60000; } else if (t.paused) t.left += 60000; else t.end += 60000; if (!tTick) tTick = setInterval(drawTimers, 500); }
+  if (x) T.splice(T.findIndex(t => t.id == x.dataset.tx), 1);
+  save(); drawTimers();
+});
+function timerDialog(label) {
+  unlockSound();
+  const pre = [1, 3, 5, 8, 10, 12, 15, 20, 25, 30, 45, 60, 90, 120];
+  modal(`<h3>⏱ Kitchen timer</h3>
+    <label class="muted" for="tLbl">Name (optional)</label><input class="inp" id="tLbl" value="${esc(label || "")}" placeholder="e.g. Steak rest, Brisket">
+    <div class="chips" style="margin:12px 0">${pre.map(m => `<button class="chip" data-pm="${m}">${m < 60 ? m + " min" : m / 60 + " hr" + (m > 60 ? "s" : "")}</button>`).join("")}</div>
+    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+      <label class="muted">Hours<input class="inp" id="tH" type="number" min="0" max="48" value="0" style="width:80px"></label>
+      <label class="muted">Minutes<input class="inp" id="tM" type="number" min="0" max="59" value="10" style="width:80px"></label>
+      <label class="muted">Seconds<input class="inp" id="tS" type="number" min="0" max="59" value="0" style="width:80px"></label>
+      <button class="btn primary" id="tGo">Start</button>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:0">Timers keep running if you leave this page or reload. You'll get an alert when one finishes (allow notifications when asked). On iPhone, alerts show when the app is open.</p>
+    <div class="row"><button class="btn" data-close>Close</button></div>`, (m, close) => {
+    const go = sec => { if (sec > 0) { startTimer(sec, $("#tLbl", m).value.trim() || "Timer"); close(); } };
+    $$("[data-pm]", m).forEach(b => b.onclick = () => go(+b.dataset.pm * 60));
+    $("#tGo", m).onclick = () => go((+$("#tH", m).value || 0) * 3600 + (+$("#tM", m).value || 0) * 60 + (+$("#tS", m).value || 0));
+    $("#tLbl", m).focus();
+  });
+}
+$("#timerBtn").onclick = () => timerDialog("");
+document.addEventListener("visibilitychange", () => { if (!document.hidden) drawTimers(); });
+
+/* ---------- meal planner ---------- */
+function planItems(d, s) { return ((S.plan[d] || {})[s] || []).filter(id => byId.get(id)); }
+function addToPlanDialog(id) {
+  const r = byId.get(id);
+  modal(`<h3>Add “${esc(r.t)}” to your meal plan</h3>
+    <label class="muted" for="pd">Day</label><select class="inp" id="pd">${DAYS.map((d, i) => `<option value="${i}">${d}</option>`).join("")}</select>
+    <label class="muted" for="ps" style="display:block;margin-top:8px">Meal</label><select class="inp" id="ps">${SLOTS.map(([k, n]) => `<option value="${k}" ${(r.c === 0 && k === "B") || (r.c >= 5 && k === "S") || (r.c > 0 && r.c < 5 && k === "D") ? "selected" : ""}>${n}</option>`).join("")}</select>
+    <div class="row"><button class="btn" data-close>Cancel</button><button class="btn primary" id="pAdd">Add</button></div>`, (m, close) => {
+    const today = (new Date().getDay() + 6) % 7; $("#pd", m).value = today;
+    $("#pAdd", m).onclick = () => { const d = $("#pd", m).value, s = $("#ps", m).value; ((S.plan[d] = S.plan[d] || {})[s] = (S.plan[d][s] || [])).push(id); save(); close(); toast(`Added to ${DAYS[d]} ${SLOTS.find(x => x[0] === s)[1]}`); };
+  });
+}
+function pickRecipe(title, pool, onPick) {
+  modal(`<h3>${esc(title)}</h3><input class="inp" id="pq" type="search" placeholder="Search recipes…">
+    <div class="pick" id="pl"></div><div class="row"><button class="btn" data-close>Close</button></div>`, (m, close) => {
+    const draw = () => {
+      const q = $("#pq", m).value, pq = parseQuery(q);
+      const src = q ? R : pool;
+      const list = src.map(r => [r, scoreRecipe(r, pq)]).filter(x => x[1] >= 0).sort((a, b) => b[1] - a[1]).slice(0, 80).map(x => x[0]);
+      $("#pl", m).innerHTML = list.map(r => `<button data-pick="${r.i}"><i style="background:${color(r)}"></i><span>${hl(r.t, pq)}</span><small class="muted">${fmtK(r.n[0])} cal · ${r.n[1]} g P</small></button>`).join("") || `<p class="muted">No matches.</p>`;
+    };
+    $("#pq", m).oninput = draw; draw();
+    $("#pl", m).onclick = e => { const b = e.target.closest("[data-pick]"); if (b) { onPick(+b.dataset.pick); close(); } };
+  });
+}
+const NOTMEAL = /jerky|pemmican|bresaola|carpaccio|tartare|broth|stock|homemade bacon|beef bacon|corned beef brisket|pastrami \(|summer sausage|rub|seasoning|gravy|sauce|confit\b|consomme|crumbs|chicharrones|cracklings/i;
+const meal = r => !NOTMEAL.test(r.t) && r.u === "" && r.k > 0;
+const POOL = {
+  B: () => R.filter(r => r.c === 0 && r.n[0] >= 200 && !/coffee|steamer|noodles|egg loaf|cloud bread|hard boiled eggs$|pickled/i.test(r.t)),
+  L: () => R.filter(r => [1, 2, 3, 4].includes(r.c) && r.tot <= 30 && meal(r) && r.n[0] >= 250),
+  D: () => R.filter(r => [1, 2, 3, 4].includes(r.c) && meal(r) && r.n[0] >= 300),
+  S: () => R.filter(r => r.c === 5 || r.c === 7),
+};
+function viewPlan() {
+  setTab("plan");
+  const g = S.goals;
+  app.innerHTML = `
+    <div class="plan-head">
+      <div><h1 style="margin:0">Meal plan</h1><p class="muted" style="margin:4px 0 0">Daily totals count one serving of each recipe per person.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="scaler" style="margin:0">People <button id="pMinus">−</button><b>${S.people}</b><button id="pPlus">+</button></span>
+        <button class="btn" id="autoFill" title="Fill empty meals: favorites, liked and want-to-try first; never ones you didn't like">✨ Auto-fill empty meals</button>
+        <button class="btn primary" id="planList">${ICON.cart} Make shopping list</button>
+        <button class="btn" id="planClear">Clear week</button>
+      </div>
+    </div>
+    <div class="week">${DAYS.map((d, di) => {
+      let t = [0, 0, 0, 0];
+      const slots = SLOTS.map(([s, n]) => {
+        const items = planItems(di, s);
+        items.forEach(id => { const r = byId.get(id); t = t.map((v, j) => v + r.n[j]); });
+        return `<div class="slot"><small>${n}</small>${items.map((id, ix) => { const r = byId.get(id); return `<div class="it" style="--c:${color(r)}"><a href="#/r/${id}">${esc(r.t)}</a><button data-rm="${di}|${s}|${ix}" aria-label="Remove">✕</button></div>`; }).join("")}<button class="add" data-add="${di}|${s}">+ add</button></div>`;
+      }).join("");
+      const bar = (v, goal, lbl, unit) => `<div>${lbl} ${Math.round(v)}${unit} / ${goal}${unit}<div class="bar"><i class="${v > goal * 1.1 && lbl !== "Protein" ? "over" : ""}" style="width:${Math.min(100, v / goal * 100)}%"></i></div></div>`;
+      return `<div class="day"><h3>${d}</h3>${slots}<div class="tot">${bar(t[0], g.kcal, "Cal", "")}${bar(t[1], g.p, "Protein", "g")}${bar(t[2], g.f, "Fat", "g")}${bar(t[3], g.c, "Carbs", "g")}</div></div>`;
+    }).join("")}</div>
+    <p class="muted" style="font-size:13px">Change your daily goals in <a href="#/settings">Settings</a>.</p>`;
+  $(".week").onclick = e => {
+    const a = e.target.closest("[data-add]"), rm = e.target.closest("[data-rm]");
+    if (a) { const [d, s] = a.dataset.add.split("|"); pickRecipe(`Add to ${DAYS[d]} ${SLOTS.find(x => x[0] === s)[1]}`, POOL[s]().slice(0, 300), id => { ((S.plan[d] = S.plan[d] || {})[s] = S.plan[d][s] || []).push(id); save(); viewPlan(); }); }
+    if (rm) { const [d, s, ix] = rm.dataset.rm.split("|"); S.plan[d][s].splice(+ix, 1); save(); viewPlan(); }
+  };
+  $("#pMinus").onclick = () => { S.people = Math.max(1, S.people - 1); save(); viewPlan(); };
+  $("#pPlus").onclick = () => { S.people = Math.min(20, S.people + 1); save(); viewPlan(); };
+  $("#planClear").onclick = () => { if (confirm("Clear the whole week?")) { S.plan = {}; save(); viewPlan(); } };
+  $("#autoFill").onclick = () => {
+    const favs = new Set([...Object.keys(S.fav).map(Number), ...Object.keys(S.status).filter(k => S.status[k] !== "dis").map(Number)]), used = new Set();
+    for (let d = 0; d < 7; d++) for (const [s] of SLOTS) {
+      if (planItems(d, s).length || (s === "S" && Math.random() < 0.5)) continue;
+      let pool = POOL[s]().filter(r => !used.has(r.i) && S.status[r.i] !== "dis");
+      const fp = pool.filter(r => favs.has(r.i));
+      if (fp.length && Math.random() < 0.6) pool = fp;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      if (pick) { used.add(pick.i); ((S.plan[d] = S.plan[d] || {})[s] = []).push(pick.i); }
+    }
+    save(); viewPlan(); toast("Filled empty meals. Swap anything you don't like.");
+  };
+  $("#planList").onclick = () => {
+    const cnt = new Map();
+    for (let d = 0; d < 7; d++) for (const [s] of SLOTS) for (const id of planItems(d, s)) cnt.set(id, (cnt.get(id) || 0) + 1);
+    if (!cnt.size) return toast("Your plan is empty");
+    addToList([...cnt].map(([id, n]) => { const r = byId.get(id); return [r, n * S.people / r.s]; }));
+    location.hash = "#/list";
+  };
+}
+
+/* ---------- shopping list ---------- */
+const UNITS = { lb: ["oz", 16], lbs: ["oz", 16], oz: ["oz", 1], cup: ["tsp", 48], cups: ["tsp", 48], tbsp: ["tsp", 3], tsp: ["tsp", 1] };
+const SKIP = /^(water|ice)\b|\bwater to cover\b|\bto taste\b/i;
+function parseIng(line) {
+  if (/optional/i.test(line)) return null;
+  const m = line.match(QRX);
+  let q = null, rest = line;
+  if (m) { q = num(m[2] || m[1]); if (m[2]) q = (num(m[1]) + num(m[2])) / 2; rest = line.slice(m[0].length); }
+  let unit = "";
+  const um = rest.match(/^(lbs?|oz|cups?|tbsp|tsp|slices?|links?|racks?|cans?|bags?)\b\.?\s+(.*)$/i);
+  if (um && q != null) { unit = um[1].toLowerCase(); rest = um[2]; }
+  let name = rest.replace(/\(.*?\)/g, "").split(",")[0].replace(/^(of|large|medium|small)\s+/i, "").trim();
+  if (!name || SKIP.test(name)) return null;
+  return { q, unit, name };
+}
+function group(name) {
+  const n = name.toLowerCase();
+  if (/salt|pepper|powder|paprika|cumin|oregano|thyme|rosemary|sage|cinnamon|nutmeg|seasoning|flakes|cayenne|extract|vinegar|sweetener|hot sauce|coriander|allspice|dill|bay|spice|gelatin|aminos|mustard|mayo|ranch|dressing|ketchup|cocoa|espresso|baking|cream of tartar|curing|smoke|ginger|turmeric|masala|curry|fennel|caraway|anise|chili/.test(n)) return "Seasonings & pantry";
+  if (/broth|stock|tallow|lard|\boil\b|ghee|duck fat|schmaltz|bacon fat|suet|fatback/.test(n)) return "Fats & broths";
+  if (/\begg|cheese|cream|butter|milk|yogurt|mozzarella|parmesan|cheddar|swiss|provolone|gruyere|feta|brie|ricotta|mascarpone|halloumi|gouda|jack|paneer|cotija|queso|camembert|cottage/.test(n)) return "Eggs & dairy";
+  if (/beef|steak|ribeye|sirloin|chuck|brisket|rib|pork|bacon|ham|sausage|chorizo|salami|pepperoni|prosciutto|chicken|turkey|duck|lamb|goat|venison|bison|elk|boar|rabbit|quail|pheasant|goose|hen|oxtail|marrow|bones|belly|tenderloin|filet|flank|skirt|hanger|picanha|tri-tip|round|shank|cheeks|wings|thigh|drumstick|breast|kielbasa|brat|hot dog|pastrami|corned|jerky|meatball|mortadella|capicola|bologna|spam|pancetta|lardon|neck|hock|trotter|knuckle|gizzard|feet|carnitas|ostrich|antelope|mutton|rind|chicharr|pellet/.test(n)) return "Meat & poultry";
+  return "Other";
+}
+const GORDER = ["Meat & poultry", "Eggs & dairy", "Fats & broths", "Seasonings & pantry", "Other"];
+function addToList(pairs) {
+  for (const [r, k] of pairs) for (const line of r.g) {
+    const p = parseIng(line); if (!p) continue;
+    const key = norm(p.name) + "|" + (UNITS[p.unit] ? UNITS[p.unit][0] : p.unit);
+    let it = S.list.find(x => x.key === key && !x.done);
+    const base = p.q == null ? null : p.q * k * (UNITS[p.unit] ? UNITS[p.unit][1] : 1);
+    if (!it) { it = { key, name: p.name, unit: p.unit, base: 0, has: p.q != null, from: [], done: false, g: group(p.name) }; S.list.push(it); }
+    if (base != null) { it.base += base; it.has = true; }
+    if (!it.from.includes(r.t)) it.from.push(r.t);
+  }
+  save();
+}
+function qtyText(it) {
+  if (!it.has || !it.base) return "";
+  const u = it.unit, fam = UNITS[u] ? UNITS[u][0] : u, b = it.base;
+  if (fam === "oz") return b >= 16 ? fmtQ(b / 16) + " lb" : fmtQ(b) + " oz";
+  if (fam === "tsp") return b >= 12 ? fmtQ(b / 48) + " cup" + (b / 48 > 1 ? "s" : "") : b >= 3 ? fmtQ(b / 3) + " tbsp" : fmtQ(b) + " tsp";
+  const n = Math.ceil(b - 0.01) === Math.round(b) ? Math.round(b) : fmtQ(b);
+  return n + (u ? " " + u : "");
+}
+function listText() {
+  return GORDER.map(g => { const its = S.list.filter(x => x.g === g && !x.done); return its.length ? g.toUpperCase() + "\n" + its.map(x => "☐ " + [qtyText(x), x.name].filter(Boolean).join(" ")).join("\n") : ""; }).filter(Boolean).join("\n\n");
+}
+function viewList() {
+  setTab("list");
+  const open = S.list.filter(x => !x.done).length;
+  app.innerHTML = `<div class="list">
+    <div class="plan-head"><div><h1 style="margin:0">Shopping list</h1><p class="muted" style="margin:4px 0 0">${open} to buy${S.list.length - open ? ` · ${S.list.length - open} checked` : ""}. Matching items from different recipes are combined.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="lCopy">${ICON.share} Copy / share</button><button class="btn" id="lPrint">${ICON.print} Print</button><button class="btn" id="lDone">Remove checked</button><button class="btn" id="lAll">Clear all</button></div></div>
+    <div class="addrow"><input class="inp" id="lNew" placeholder="Add an item, e.g. 2 dozen eggs"><button class="btn primary" id="lAdd">Add</button></div>
+    ${S.list.length ? GORDER.map(g => { const its = S.list.map((x, i) => [x, i]).filter(([x]) => x.g === g); return its.length ? `<div class="grp"><h3>${g}</h3>${its.map(([x, i]) => `<label class="${x.done ? "done" : ""}"><input type="checkbox" data-li="${i}" ${x.done ? "checked" : ""}><span><b>${esc(qtyText(x))}</b> ${esc(x.name)}${x.from.length ? `<small>${esc(x.from.slice(0, 3).join(", "))}${x.from.length > 3 ? ` +${x.from.length - 3} more` : ""}</small>` : ""}</span><button class="x" data-lx="${i}" aria-label="Remove">✕</button></label>`).join("")}</div>` : ""; }).join("")
+      : `<div class="empty"><b>Your list is empty</b>Open a recipe and tap “Add to shopping list”, or build a meal plan and tap “Make shopping list”.</div>`}
+  </div>`;
+  $(".list").addEventListener("change", e => { const i = e.target.dataset.li; if (i != null) { S.list[i].done = e.target.checked; save(); e.target.closest("label").classList.toggle("done", e.target.checked); } });
+  $(".list").addEventListener("click", e => { const x = e.target.closest("[data-lx]"); if (x) { e.preventDefault(); S.list.splice(+x.dataset.lx, 1); save(); viewList(); } });
+  const add = () => { const v = $("#lNew").value.trim(); if (!v) return; S.list.push({ key: "custom|" + Date.now(), name: v, unit: "", base: 0, has: false, from: [], done: false, g: group(v) }); save(); viewList(); $("#lNew").focus(); };
+  $("#lAdd").onclick = add; $("#lNew").onkeydown = e => { if (e.key === "Enter") add(); };
+  $("#lDone").onclick = () => { S.list = S.list.filter(x => !x.done); save(); viewList(); };
+  $("#lAll").onclick = () => { if (confirm("Clear the whole shopping list?")) { S.list = []; save(); viewList(); } };
+  $("#lPrint").onclick = () => window.print();
+  $("#lCopy").onclick = async () => { const t = listText() || "Shopping list is empty"; try { if (navigator.share) await navigator.share({ title: "Shopping list", text: t }); else { await navigator.clipboard.writeText(t); toast("List copied"); } } catch (e) {} };
+}
+
+/* ---------- what can I make (pantry) ---------- */
+const STAPLE = /\b(salt|pepper|water|powder|paprika|cumin|oregano|thyme|rosemary|sage|cinnamon|nutmeg|seasoning|flakes|cayenne|extract|vanilla|vinegar|baking powder|sweetener|hot sauce|coriander|allspice|dill|parsley|bay|spice|ginger|turmeric|masala|curry|fennel|caraway|anise|chili powder|cream of tartar|liquid smoke|ice)\b/i;
+const FATS = /\b(butter|tallow|lard|oil|ghee|duck fat|bacon fat|schmaltz)\b/i;
+const BASE = (() => {
+  const c = new Map();
+  for (const r of R) for (const l of r.g) { const p = parseIng(l); if (!p) continue; const n = norm(p.name).replace(/^(shredded|grated|crumbled|thick-cut|boneless|skinless|fresh|whole|full-fat|unsalted|sliced|diced|cooked|crushed|plain|melted|softened|cold|hard boiled|soft boiled)\s+/g, "").replace(/^(shredded|grated|boneless,? skinless|skin-on)\s+/, ""); if (STAPLE.test(n) || n.length > 26) continue; c.set(n, (c.get(n) || 0) + 1); }
+  return [...c].sort((a, b) => b[1] - a[1]).slice(0, 70).map(x => x[0]);
+})();
+function pantryMatch() {
+  const have = S.pantry.map(norm);
+  if (!have.length) return [];
+  const hit = s => have.some(h => variants(h).some(v => s.includes(v)));
+  const out = [];
+  for (const r of R) {
+    const key = r.g.filter(l => !/optional/i.test(l)).map(norm).filter(l => !STAPLE.test(l.replace(/\(.*?\)/g, "")) || /(cream|cheese|beef|pork|chicken|egg|bacon)/.test(l)).filter(l => !(S.pantryFats && FATS.test(l) && !/(cheese|cream)/.test(l)));
+    if (!key.length) continue;
+    const got = key.filter(hit);
+    if (!got.length) continue;
+    out.push({ r, got: got.length, need: key.length, missing: key.filter(l => !hit(l)) });
+  }
+  return out.sort((a, b) => (a.need - a.got) - (b.need - b.got) || b.got - a.got || a.r.tot - b.r.tot);
+}
+function viewPantry() {
+  setTab("pantry");
+  const res = pantryMatch(), full = res.filter(x => x.got === x.need);
+  app.innerHTML = `
+    <h1 style="margin:0 0 4px">What can I make?</h1>
+    <p class="muted" style="margin:0 0 12px">Type what's in your fridge. Salt, pepper and dried spices are assumed.</p>
+    <div class="pantry-in" id="pin">${S.pantry.map((p, i) => `<button class="chip" data-pr="${i}">${esc(p)} ×</button>`).join("")}<input id="pIn" list="pDl" placeholder="${S.pantry.length ? "Add another…" : "e.g. ground beef, eggs, cheddar"}" aria-label="Add ingredient"></div>
+    <datalist id="pDl">${BASE.map(b => `<option value="${esc(b)}">`).join("")}</datalist>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="pFats" ${S.pantryFats ? "checked" : ""}> I have butter and cooking fats</label>
+    <div class="sugg">${BASE.filter(b => !S.pantry.map(norm).includes(b)).slice(0, 24).map(b => `<button class="chip" data-pa="${esc(b)}">+ ${esc(b)}</button>`).join("")}</div>
+    ${S.pantry.length ? `<div class="resbar"><h2>${full.length} you can make now <span class="muted" style="font:600 15px var(--sans)">· ${res.length - full.length} more need 1+ item</span></h2>${S.pantry.length ? `<button class="btn sm" id="pClr">Clear</button>` : ""}</div><div class="grid" id="pRes"></div><div class="more" id="pMore"></div>` : `<div class="empty"><b>Add a few ingredients</b>We'll find recipes you can cook right now, and ones that need just one more thing.</div>`}`;
+  const addP = v => { v = v.trim().toLowerCase(); if (v && !S.pantry.includes(v)) { S.pantry.push(v); save(); } viewPantry(); $("#pIn").focus(); };
+  $("#pIn").onkeydown = e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addP(e.target.value); } else if (e.key === "Backspace" && !e.target.value && S.pantry.length) { S.pantry.pop(); save(); viewPantry(); $("#pIn").focus(); } };
+  $("#pIn").onchange = e => { if (BASE.includes(norm(e.target.value))) addP(e.target.value); };
+  $("#pin").onclick = e => { const b = e.target.closest("[data-pr]"); if (b) { S.pantry.splice(+b.dataset.pr, 1); save(); viewPantry(); } };
+  $(".sugg").onclick = e => { const b = e.target.closest("[data-pa]"); if (b) addP(b.dataset.pa); };
+  $("#pFats").onchange = e => { S.pantryFats = e.target.checked; save(); viewPantry(); };
+  if ($("#pClr")) $("#pClr").onclick = () => { S.pantry = []; save(); viewPantry(); };
+  if ($("#pRes")) {
+    let shown = 0;
+    const more = () => {
+      $("#pRes").insertAdjacentHTML("beforeend", res.slice(shown, shown + 36).map(x => card(x.r).replace('<div class="meta">', `<div class="match ${x.got === x.need ? "full" : ""}">${x.got === x.need ? "✓ You have everything" : `Have ${x.got} of ${x.need} · need: ${esc(x.missing.slice(0, 2).map(l => scaleLine(l, 1).rest.split(",")[0]).join(", "))}${x.missing.length > 2 ? "…" : ""}`}</div><div class="meta">`)).join(""));
+      shown += 36; $("#pMore").innerHTML = shown < res.length ? `<button class="btn">Show more</button>` : "";
+    };
+    $("#pMore").onclick = more; more();
+  }
+}
+
+/* ---------- settings ---------- */
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; });
+function viewSettings() {
+  setTab("");
+  const g = S.goals, ios = /iphone|ipad|ipod/i.test(navigator.userAgent), standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  app.innerHTML = `<div class="settings">
+    <h1 style="margin:0">Settings</h1>
+    <div class="box"><h3>Install on your phone</h3>
+      ${standalone ? `<p>✓ Running as an installed app.</p>` : ios ? `<p>On iPhone or iPad: open this site in <b>Safari</b>, tap the <b>Share</b> button, then <b>Add to Home Screen</b>.</p>` : `<p>Add the cookbook to your home screen. It opens full screen and works with no internet.</p><button class="btn primary" id="install" ${installEvt ? "" : "disabled"}>Install app</button>${installEvt ? "" : `<p class="muted" style="font-size:13px">If the button is grayed out, use your browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.</p>`}`}
+      <p class="muted" style="font-size:13px" id="offline">${navigator.serviceWorker && navigator.serviceWorker.controller ? "✓ Saved for offline use." : "Offline copy will be ready after this first visit finishes loading."}</p></div>
+    <div class="box"><h3>Daily goals (used by the meal planner)</h3>
+      <div class="goals">${[["kcal", "Calories"], ["p", "Protein (g)"], ["f", "Fat (g)"], ["c", "Net carbs (g)"]].map(([k, l]) => `<label>${l}<input class="inp" type="number" min="0" data-goal="${k}" value="${g[k]}"></label>`).join("")}</div></div>
+    <div class="box"><h3>Appearance</h3><div class="chips">${[["", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<button class="chip ${(S.theme || "") === v ? "on" : ""}" data-th="${v}">${t}</button>`).join("")}</div></div>
+    <div class="box"><h3>Backup</h3>
+      <p class="muted" style="margin-top:0">Favorites, notes, ratings, plans and lists are stored in this browser only. Save a backup file to move them to another device.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="bExp">Download backup</button><label class="btn">Restore backup<input type="file" id="bImp" accept="application/json,.json" hidden></label><button class="btn" id="bReset">Erase my data</button></div>
+      <p class="muted" style="font-size:13px">${Object.keys(S.fav).length} favorites · ${Object.keys(S.status).length} in want-to-try / tried lists · ${Object.keys(S.notes).length} notes · ${Object.keys(S.rating).length} ratings · ${Object.values(S.made).reduce((a, b) => a + b.length, 0)} cooks logged</p></div>
+    <div class="box helpbox"><h3>Search tips</h3>${searchHelp()}</div>
+  </div>`;
+  $$("[data-goal]").forEach(i => i.onchange = () => { S.goals[i.dataset.goal] = Math.max(1, +i.value || 1); save(); toast("Goal saved"); });
+  $$("[data-th]").forEach(b => b.onclick = () => { S.theme = b.dataset.th || null; applyTheme(); save(); viewSettings(); });
+  if ($("#install")) $("#install").onclick = async () => { if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewSettings(); } };
+  $("#bExp").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: "application/json" })); a.download = `carnivore-cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
+  $("#bImp").onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== "object" || !d.fav) throw 0; S = Object.assign(DEF(), d); timersFromState(); save(); applyTheme(); toast("Backup restored"); viewSettings(); } catch (x) { toast("That file isn't a cookbook backup"); } };
+  $("#bReset").onclick = () => { if (confirm("Erase favorites, notes, ratings, plans and lists on this device?")) { S = DEF(); save(); applyTheme(); timersFromState(); viewSettings(); } };
+}
+function searchHelp() {
+  return `<p style="margin-top:0">Search looks through every title, ingredient, step and tip.</p>
+  <ul style="padding-left:18px;margin:0;line-height:1.9">
+    <li><code>ribeye butter</code> recipes with both words</li>
+    <li><code>"cream cheese"</code> an exact phrase</li>
+    <li><code>chicken -wings</code> leave out a word</li>
+    <li><code>protein&gt;40</code> <code>calories&lt;500</code> <code>carbs&lt;2</code> <code>fat&lt;30</code> <code>time&lt;=20</code> <code>serves&gt;=6</code></li>
+    <li><code>air fryer</code> <code>slow cooker</code> <code>smoker</code> <code>budget</code> <code>quick</code> cooking methods and tags</li>
+    <li>Press <code>/</code> anywhere to jump to search.</li></ul>`;
+}
+function applyTheme() {
+  const t = S.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = t;
+  $('meta[name="theme-color"]').content = t === "dark" ? "#1b1816" : "#8e2c2c";
+}
+
+/* ---------- routing ---------- */
+let lastRoute = "";
+function route() {
+  const h = location.hash || "#/";
+  const prevRoute = lastRoute; lastRoute = h;
+  let m;
+  document.querySelectorAll(".cook,.modal-bg").forEach(x => x.remove());
+  if ((m = h.match(/^#\/r\/(\d+)/))) viewRecipe(+m[1]);
+  else if (h.startsWith("#/mine") || h.startsWith("#/fav")) viewMine((h.match(/^#\/mine\/(\w+)/) || [])[1]);
+  else if (h.startsWith("#/plan")) viewPlan();
+  else if (h.startsWith("#/list")) viewList();
+  else if (h.startsWith("#/pantry")) viewPantry();
+  else if (h.startsWith("#/settings")) viewSettings();
+  else {
+    const q = (h.match(/[?&]q=([^&]*)/) || [])[1];
+    if (q != null) { Q = decodeURIComponent(q); $("#q").value = Q; $("#searchWrap").classList.toggle("has", !!Q); }
+    viewBrowse();
+    if (prevRoute.startsWith("#/r/") && scrollMem) requestAnimationFrame(() => window.scrollTo(0, scrollMem));
+  }
+}
+let scrollMem = 0;
+window.addEventListener("scroll", () => { if (!location.hash.startsWith("#/r/")) scrollMem = window.scrollY; }, { passive: true });
+window.addEventListener("hashchange", route);
+
+/* ---------- search box ---------- */
+let qT;
+$("#q").addEventListener("input", e => {
+  clearTimeout(qT);
+  qT = setTimeout(() => {
+    Q = e.target.value; $("#searchWrap").classList.toggle("has", !!Q);
+    const target = "#/" + (Q ? "?q=" + encodeURIComponent(Q) : "");
+    if (/^#\/(\?|$)/.test(location.hash || "#/")) { history.replaceState(null, "", target); lastRoute = target; viewBrowse(); }
+    else location.hash = target;
+  }, 140);
+});
+$("#q").addEventListener("keydown", e => { if (e.key === "Enter") { e.target.blur(); } });
+$("#qClear").onclick = () => { $("#q").value = ""; $("#q").dispatchEvent(new Event("input")); $("#q").focus(); };
+$("#searchHelp").onclick = () => modal(`<div class="helpbox"><h3>Search tips</h3>${searchHelp()}</div><div class="row"><button class="btn" data-close>Got it</button></div>`);
+document.addEventListener("keydown", e => { if (e.key === "/" && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); $("#q").focus(); } });
+$("#surprise").onclick = () => { const { list } = results(); const pool = list.length ? list : R; location.hash = "#/r/" + pool[Math.floor(Math.random() * pool.length)].i; };
+$("#theme").onclick = () => { S.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; applyTheme(); save(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!S.theme) applyTheme(); });
+
+/* ---------- printable PDF link (only if the PDF is in the repo) ---------- */
+fetch("Easy_Keto_Carnivore_Cookbook.pdf", { method: "HEAD" }).then(r => { if (r.ok) $("#pdfLink").innerHTML = ` · <a href="Easy_Keto_Carnivore_Cookbook.pdf" download>Download the printable PDF</a>`; }).catch(() => {});
+
+/* ---------- offline (service worker) ---------- */
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("sw.js").then(reg => {
+    reg.addEventListener("updatefound", () => {
+      const w = reg.installing;
+      w && w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) toast("Update ready: it will load next time you open the app"); });
+    });
+  }).catch(() => {});
+}
+
+applyTheme(); counts(); timersFromState(); route();
+})();

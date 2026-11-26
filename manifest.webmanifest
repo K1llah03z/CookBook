@@ -1,0 +1,24 @@
+{
+  "name": "Easy Keto Carnivore Cookbook",
+  "short_name": "Carnivore",
+  "description": "1,000 easy keto carnivore recipes with search, nutrition, meal planner, shopping list and cook mode.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#fbf7f1",
+  "theme_color": "#8e2c2c",
+  "categories": ["food", "health", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Meal plan", "url": "./#/plan", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Shopping list", "url": "./#/list", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "What can I make?", "url": "./#/pantry", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
