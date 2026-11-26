@@ -245,7 +245,7 @@ function viewBrowse(opts = {}) {
   const { list, pq } = results();
   const showHero = !Q && !fActive() && !opts.fav;
   app.innerHTML = `
-  ${showHero ? `<div class="hero">${M.cats.map((c, i) => `<a href="#/" data-cat="${i}" style="background:${M.colors[i]}"><b>${esc(c)}</b><span>${R.filter(r => r.c === i).length} recipes</span></a>`).join("")}</div>` : ""}
+  ${showHero ? `<div class="hero">${M.cats.map((c, i) => `<a href="#/" data-cat="${i}" style="background:${M.colors[i]}"><b>${esc(c)}</b><span>${R.filter(r => r.c === i).length} recipes</span></a>`).join("")}</div><a class="guide-link" href="#/guide">🌡️ <span><b>Before you start</b> · safe cooking temperatures, pantry staples, and tips</span><span aria-hidden="true">›</span></a>` : ""}
   <div class="browse">
     <aside class="filters" id="filters" aria-label="Filters">${filtersHTML()}</aside>
     <section>
@@ -528,6 +528,7 @@ function viewRecipe(id) {
         <h3 style="color:${c}">Ingredients</h3>
         <div class="scaler">Servings <button id="sMinus" aria-label="Fewer servings">−</button><b id="sNum">${serv}</b><button id="sPlus" aria-label="More servings">+</button>${k !== 1 ? `<button class="btn sm" id="sReset" style="border-radius:8px;width:auto;height:auto">Reset</button>` : ""}</div>
         <ul class="ings">${r.g.map((g, i) => { const s = scaleLine(g, k); return `<li><input type="checkbox" id="g${i}" aria-label="Got it"><span>${s.q ? `<span class="q">${esc(s.q)}</span> ` : ""}${esc(s.rest)}</span></li>`; }).join("")}</ul>
+        ${(() => { const st = safeTemps(r); return st.length ? `<div class="safe"><b>🌡️ Safe temp</b>${st.map(x => `<span>${esc(x)}</span>`).join("")}<a href="#/guide">All temperatures ›</a></div>` : ""; })()}
         ${k !== 1 ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">Amounts scaled ×${(+k.toFixed(2))}. Cook times stay about the same; larger roasts may need longer.</p>` : ""}
       </div>
       <div>
@@ -1507,6 +1508,54 @@ function iosInstallSteps() {
 /* ---------- settings ---------- */
 let installEvt = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; });
+/* ---------- safe temperatures + "Before you start" guide ---------- */
+const SKIP_ING = /cooked|leftover|deli|smoked sausage|kielbasa|hot dog|frank|\bham\b|bacon|pepperoni|salami|prosciutto|jerky|rotisserie|shredded|chopped chicken|carnitas|pulled|roast beef|corned|pastrami|bresaola|capicola|mortadella|chicharr|rinds|broth|stock|bones|skin|\bfat\b|lard|schmaltz|tallow|gravy|see recipe|batch|eggs?\b|cured|confit/;
+function safeTemps(r) {
+  const out = new Map();
+  for (const g of r.g || []) {
+    const L = g.toLowerCase();
+    if (SKIP_ING.test(L) && !/ground|breakfast sausage|italian sausage|chorizo|merguez/.test(L)) continue;
+    if (/cooked|see recipe|quail eggs?|duck eggs?|\brub\b|seasoning|spice|powder|sauce|butter|dressing/.test(L)) continue;
+    if (/duck breast/.test(L)) { out.set("duckb", "Duck breast: USDA says 165°F; many cooks serve it at 135°F"); continue; }
+    if (/pork belly/.test(L)) { out.set("belly", "Pork belly: cook until tender and well rendered (at least 145°F)"); continue; }
+    if (/ground (chicken|turkey)|chicken|turkey|cornish|\bhens?\b|quail|pheasant|goose|duck (legs?|wings)|whole duck|\bducks?\b(?! breast)/.test(L) && !/duck breast/.test(L)) out.set("poultry", "Chicken, turkey, and other poultry 165°F");
+    else if (/ground |sausage|chorizo|merguez|meatball/.test(L)) out.set("ground", "Ground meat and sausage 160°F");
+    else if (/pork|secreto|boar/.test(L) && !/belly|shoulder|butt|hock|trotter|knuckle|ribs/.test(L)) out.set("pork", "Pork chops, loin, and tenderloin 145°F, then rest 3 minutes");
+    else if (/pork (belly|shoulder|butt)|brisket|chuck|short ribs?|shank|oxtail|cheeks/.test(L) && !/steak/.test(L)) out.set("slow", "Pulled or shredded: cook until fork-tender (195 to 203°F)");
+    else if (/steak|ribeye|sirloin|strip|filet|tenderloin|tri-tip|picanha|roast|rack|lamb|venison|bison|elk|goat|veal|backstrap|chops?/.test(L)) out.set("whole", "Beef, lamb, and game steaks and roasts 145°F (medium-rare 130 to 135°F is your choice)");
+  }
+  return [...out.values()];
+}
+const GUIDE_TEMPS = [["Beef, lamb, and game steaks and roasts", "145°F (USDA)"], ["Medium-rare, if you choose it", "130 to 135°F"], ["Pork chops, loin, and tenderloin (rest 3 min)", "145°F"], ["Ground beef, pork, lamb, and game; sausage", "160°F"], ["Chicken, turkey, duck legs, and all ground poultry", "165°F"], ["Pulled pork, brisket, and shredded roasts", "195 to 203°F"]];
+function viewGuide() {
+  setTab("");
+  app.innerHTML = `<div class="settings guide">
+    <h1 style="margin:0">Before you start</h1>
+    <p>Every recipe in this book is built on animal foods: beef, pork, poultry, lamb, game, eggs, butter, cheese, and cream. Seasonings stay simple (salt, pepper, herbs, and spices) and nearly every recipe uses 6 ingredients or fewer.</p>
+    <div class="box"><h3>🌡️ Safe internal temperatures</h3>
+      <table class="temps">${GUIDE_TEMPS.map(([a, b], i) => `<tr${i === 1 ? ' class="sub"' : ""}><td>${a}</td><td>${b}</td></tr>`).join("")}</table>
+      <p class="muted" style="font-size:13px;margin-bottom:0">Check the thickest part with an instant-read thermometer, away from the bone.</p></div>
+    <div class="box"><h3>🥚 Raw and lightly cooked eggs</h3>
+      <p style="margin:0">A few recipes use raw or lightly cooked yolks (mayo, hollandaise, some desserts). Use pasteurized eggs for children, pregnant women, older adults, or anyone with a weak immune system.</p></div>
+    <div class="box"><h3>🧺 Pantry staples</h3><ul>
+      <li><b>Fats:</b> butter, beef tallow, lard, bacon fat, avocado oil</li>
+      <li><b>Dairy:</b> heavy cream, cream cheese, sour cream, cheddar, Parmesan, mozzarella</li>
+      <li><b>Eggs:</b> buy them by the dozen (or three)</li>
+      <li><b>Seasonings:</b> coarse salt, black pepper, garlic powder, smoked paprika, cumin, dried herbs</li>
+      <li><b>Handy extras:</b> pork rinds (for breading), bone broth, sugar-free mayo and hot sauce</li></ul></div>
+    <div class="box"><h3>✅ Tips for success</h3><ul>
+      <li>Read labels. Bacon, sausage, deli meat, and sauces often hide sugar and starch.</li>
+      <li>Use a meat thermometer. It takes the guesswork out of steaks, chops, and chicken.</li>
+      <li>Pat meat dry before searing for a better crust.</li>
+      <li>Cook once, eat twice. Many recipes make great leftovers for lunch.</li>
+      <li>A few recipes list optional items (like pickles or capers). Leave them out for strict carnivore.</li>
+      <li>Allulose browns faster than sugar. Use medium-low heat for caramels and custards.</li>
+      <li>Nutrition is an estimate per serving, calculated from USDA values for the listed ingredients. Optional items are not included.</li></ul></div>
+    <p class="muted" style="font-size:13px">This cookbook is for general cooking inspiration, not medical advice. Check with your doctor before making big changes to your diet.</p>
+  </div>`;
+  window.scrollTo(0, 0);
+}
+
 function viewSettings() {
   setTab("");
   const g = S.goals, ios = /iphone|ipad|ipod/i.test(navigator.userAgent), standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -1526,6 +1575,7 @@ function viewSettings() {
     </div>
     <div class="box"><h3>Daily goals (used by the meal planner)</h3>
       <div class="goals">${[["kcal", "Calories"], ["p", "Protein (g)"], ["f", "Fat (g)"], ["c", "Net carbs (g)"]].map(([k, l]) => `<label>${l}<input class="inp" type="number" min="0" data-goal="${k}" value="${g[k]}"></label>`).join("")}</div></div>
+    <div class="box"><a class="sister" href="#/guide"><span class="ic">🌡️</span><span><b>Before you start</b><br><span class="muted" style="font-size:13px">Safe cooking temperatures, raw egg safety, pantry staples, and tips.</span></span></a></div>
     <div class="box"><a class="sister" href="https://k1llah03z.github.io/FitTrack/" target="_blank" rel="noopener"><span class="ic">💪</span><span><b>FitTrack</b><br><span class="muted" style="font-size:13px">Track meals, fasting, workouts and Apple Watch data. Every recipe here shows up in its food search with nutrition, and the same Apple passkey syncs both apps.</span></span></a></div>
     <div class="box"><h3>Appearance</h3><div class="chips">${[["", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<button class="chip ${(S.theme || "") === v ? "on" : ""}" data-th="${v}">${t}</button>`).join("")}</div></div>
     <div class="box"><h3>Backup</h3>
@@ -1578,6 +1628,7 @@ function route() {
   else if (h.startsWith("#/plan")) viewPlan();
   else if (h.startsWith("#/list")) viewList();
   else if (h.startsWith("#/pantry")) viewPantry();
+  else if (h.startsWith("#/guide")) viewGuide();
   else if (h.startsWith("#/settings")) viewSettings();
   else if ((m = h.match(/^#\/sync\/([A-Za-z0-9-]+)/))) { const c = m[1]; history.replaceState(null, "", "#/settings"); viewSettings(); if (SYNC_ON() && normCode(S.sync.code) === normCode(c)) toast("This device already syncs with that code"); else joinDialog(c); }
   else {
