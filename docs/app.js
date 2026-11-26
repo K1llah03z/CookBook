@@ -176,6 +176,9 @@ const ICON = {
   cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6"/></svg>',
   chef: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 13.9A4 4 0 0 1 7.5 6a5 5 0 0 1 9 0A4 4 0 0 1 18 13.9V21H6z"/><path d="M6 17h12"/></svg>',
   print: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>',
+  iosShare: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M8 11H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-2"/></svg>',
+  iosAdd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/></svg>',
+  iosMore: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg>',
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>',
   filter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 3H2l8 9.5V19l4 2v-8.5z"/></svg>',
 };
@@ -544,7 +547,7 @@ async function pushSub() {
 }
 async function enablePush() {
   if (!PUSH) { toast("Timer alert server isn't set up yet (see README)"); return false; }
-  if (isIOS && !isStandalone()) { modal(`<h3>Add to Home Screen first</h3><p>On iPhone, lock-screen alerts work once the cookbook is on your Home Screen:</p><ol><li>In Safari tap <b>Share</b> → <b>Add to Home Screen</b>.</li><li>Open the cookbook from that new icon.</li><li>Tap <b>⏱ → Turn on lock-screen alerts</b> again.</li></ol><div class="row"><button class="btn primary" data-close>OK</button></div>`); return false; }
+  if (isIOS && !isStandalone()) { modal(`<h3>Add to Home Screen first</h3><p>On iPhone, lock-screen alerts work once the cookbook is on your Home Screen:</p>${iosInstallSteps()}<p>Then tap <b>⏱ → Turn on lock-screen alerts</b> again.</p><div class="row"><button class="btn primary" data-close>OK</button></div>`); return false; }
   if (!pushSupported()) { toast("This browser can't receive lock-screen alerts"); return false; }
   try {
     const perm = await Notification.requestPermission();
@@ -1386,6 +1389,17 @@ async function passkeyFirst(tryExisting) {
   } catch (e) { toast(pkErr(e)); }
 }
 
+/* ---------- "Add to Home Screen" picture guide for iPhone/iPad ---------- */
+const iosKey = (icon, label) => `<span class="ioskey">${ICON[icon]}${label ? `<span>${label}</span>` : ""}</span>`;
+function iosInstallSteps() {
+  return `<ol class="iossteps">
+    <li>Open this site in <b>Safari</b>.</li>
+    <li>Tap the Share button ${iosKey("iosShare")} at the bottom of the screen (top right on iPad).<br><span class="muted" style="font-size:13px">Don't see it? Tap ${iosKey("iosMore")} first, then ${iosKey("iosShare", "Share")}.</span></li>
+    <li>Scroll down and tap ${iosKey("iosAdd", "Add to Home Screen")}<br><span class="muted" style="font-size:13px">Not in the list? Tap <b>View More</b> at the bottom of the menu.</span></li>
+    <li>Tap <b>Add</b>, then open the cookbook from its new icon.</li>
+  </ol>`;
+}
+
 /* ---------- settings ---------- */
 let installEvt = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; });
@@ -1395,7 +1409,7 @@ function viewSettings() {
   app.innerHTML = `<div class="settings">
     <h1 style="margin:0">Settings</h1>
     <div class="box"><h3>Install on your phone</h3>
-      ${standalone ? `<p>✓ Running as an installed app.</p>` : ios ? `<p>On iPhone or iPad: open this site in <b>Safari</b>, tap the <b>Share</b> button, then <b>Add to Home Screen</b>.</p>` : `<p>Add the cookbook to your home screen. It opens full screen and works with no internet.</p><button class="btn primary" id="install" ${installEvt ? "" : "disabled"}>Install app</button>${installEvt ? "" : `<p class="muted" style="font-size:13px">If the button is grayed out, use your browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.</p>`}`}
+      ${standalone ? `<p>✓ Running as an installed app.</p>` : ios ? iosInstallSteps() : `<p>Add the cookbook to your home screen. It opens full screen and works with no internet.</p><button class="btn primary" id="install" ${installEvt ? "" : "disabled"}>Install app</button>${installEvt ? "" : `<p class="muted" style="font-size:13px">If the button is grayed out, use your browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.</p>`}`}
       <p class="muted" style="font-size:13px" id="offline">${navigator.serviceWorker && navigator.serviceWorker.controller ? "✓ Saved for offline use." : "Offline copy will be ready after this first visit finishes loading."}</p></div>
     <div class="box"><h3>Sync between devices</h3>${syncBoxHTML()}</div>
     <div class="box"><h3>App version</h3>
