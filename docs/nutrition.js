@@ -15,8 +15,8 @@ window.EKC_NUT={"P":{"butter":[717,0.9,81,0.1,{"cup":227,"stick":113}],"fat":[90
     if (!m) return [null, null, s, pw];
     const a = num(m[1]), b = m[2] ? num(m[2]) : a;
     let cnt = (a + b) / 2, rest = m[3], unit = null;
-    const um = rest.match(/^(lbs?|pounds?|oz|cups?|tbsp|tsp|pinch|gallons?|quarts?|slices?|links?|racks?|bags?|package|cans?|sticks?|strips|wheel|block|batch|sprigs?|leaves|whole)\b\.?\s*(.*)$/);
-    if (um) { unit = um[1] === "lbs" ? "lb" : um[1].replace(/s$/, ""); if (unit === "pound") unit = "lb"; rest = um[2]; }
+    const um = rest.match(/^(lbs?|pounds?|oz|cups?|tbsp|tsp|pinch|gallons?|quarts?|slices?|links?|racks?|bags?|package|cans?|sticks?|strips|wheel|block|batch(?:es)?|sprigs?|leaves|whole)\b\.?\s*(.*)$/);
+    if (um) { unit = um[1] === "lbs" ? "lb" : um[1].replace(/s$/, ""); if (unit === "pound") unit = "lb"; if (unit.startsWith("batch")) unit = "batch"; rest = um[2]; }
     return [cnt, unit, rest, pw];
   }
   const match = name => { const n = name.toLowerCase(); for (const [rx, k] of RC) if (rx.test(n)) return k; return null; };
