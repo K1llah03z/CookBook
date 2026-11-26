@@ -373,7 +373,10 @@ function stepHTML(s, label) {
   return out + esc(s.slice(last));
 }
 let curServ = {};
+let shownRecipe = null;
 function viewRecipe(id) {
+  const keepY = shownRecipe === id && location.hash.startsWith("#/r/" + id) && document.querySelector(".recipe") ? window.scrollY : null;
+  shownRecipe = id;
   const r = byId.get(id);
   if (!r) { app.innerHTML = `<div class="empty"><b>Recipe not found</b><a href="#/">Back to recipes</a></div>`; return; }
   setTab("");
@@ -446,7 +449,7 @@ function viewRecipe(id) {
     </div>
     ${sim.length ? `<section class="similar no-print"><h2>You might also like</h2><div class="grid">${sim.map(x => card(x)).join("")}</div></section>` : ""}
   </article>`;
-  window.scrollTo(0, 0);
+  window.scrollTo({ top: keepY == null ? 0 : keepY, left: 0, behavior: "instant" });   // same recipe re-drawn (stars, servings, lists): stay where you were
   const setServ = v => { curServ[id] = Math.max(1, Math.min(48, v)); viewRecipe(id); };
   $("#sMinus").onclick = () => setServ(serv - 1);
   $("#sPlus").onclick = () => setServ(serv + 1);
@@ -1160,6 +1163,7 @@ function route() {
   const prevRoute = lastRoute; lastRoute = h;
   let m;
   document.querySelectorAll(".cook,.modal-bg").forEach(x => x.remove());
+  if (!/^#\/r\//.test(h)) shownRecipe = null;
   if ((m = h.match(/^#\/r\/(\d+)/))) viewRecipe(+m[1]);
   else if (h.startsWith("#/mine") || h.startsWith("#/fav")) viewMine((h.match(/^#\/mine\/(\w+)/) || [])[1]);
   else if (h.startsWith("#/plan")) viewPlan();

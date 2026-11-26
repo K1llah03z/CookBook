@@ -131,8 +131,11 @@ ol.steps li::before{content:counter(s);width:30px;height:30px;border-radius:50%;
 .tbtn{border:1px solid var(--line);background:var(--soft);border-radius:999px;padding:1px 9px;font-size:13px;font-weight:700;margin-left:4px;white-space:nowrap}
 .tip{border-left:5px solid var(--c,var(--accent));background:var(--soft);border-radius:10px;padding:12px 16px;margin-top:14px}
 .tip b{color:var(--c,var(--accent))}
-.notes textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg);resize:vertical;
-  background-image:repeating-linear-gradient(transparent,transparent 27px,var(--line) 27px,var(--line) 28px);line-height:28px}
+.notes textarea{width:100%;min-height:144px;border:1px solid var(--line);border-radius:10px;resize:vertical;display:block;
+  -webkit-appearance:none;appearance:none;font-size:16px;line-height:28px;padding:4px 12px 0;
+  /* ruled lines: one every 28px, drawn in the content area so they move with the text (and scroll with it) */
+  background-color:var(--bg);background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,var(--line) 27px,var(--line) 28px);
+  background-origin:content-box;background-clip:padding-box;background-attachment:local;background-position:0 -4px}
 .stars{display:flex;gap:2px}
 .stars button{border:0;background:none;padding:0 1px;font-size:22px;color:var(--line);line-height:1}
 .stars button.on{color:#e0a400}
