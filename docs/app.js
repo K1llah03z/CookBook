@@ -344,9 +344,11 @@ function viewMine(tab) {
   app.innerHTML = `<h1 style="margin:0 0 10px">My recipes</h1>
     <div class="chips" style="margin-bottom:16px">${tabs.map(([k, t, ic]) => `<a class="chip ${k === tab ? "on" : ""}" href="#/mine/${k}" style="text-decoration:none">${ic} ${esc(t)} <span class="muted">${n(k)}</span></a>`).join("")}</div>
     ${tab === "want" && list.length ? `<p style="margin-top:-6px"><button class="btn sm" id="wantPlan">${ICON.cal} Put want-to-try recipes in my meal plan</button></p>` : ""}
+    ${list.length ? `<p style="margin-top:-6px"><button class="btn sm" id="minePdf">${ICON.print} PDF of these ${list.length} recipe${list.length === 1 ? "" : "s"}</button></p>` : ""}
     <div id="mineRes"></div>`;
   if (!list.length) $("#mineRes").innerHTML = `<div class="empty"><b>Nothing here yet</b>${empty}</div>`;
   else grid(list, null, $("#mineRes"));
+  if ($("#minePdf")) $("#minePdf").onclick = e => pdfManyRecipes(list, "My " + tabs.find(t => t[0] === tab)[1], e.currentTarget);
   if ($("#wantPlan")) $("#wantPlan").onclick = () => {
     const q = list.slice(); let added = 0;
     for (let d = 0; d < 7 && q.length; d++) for (const [s] of SLOTS) {
@@ -411,7 +413,7 @@ function viewRecipe(id) {
       <button class="btn" id="planBtn">${ICON.cal} Add to plan</button>
       <button class="btn" id="timerBtn2">⏱ Timer</button>
       <button class="btn" id="listBtn">${ICON.cart} Add to shopping list</button>
-      <button class="btn" id="printBtn">${ICON.print} Print</button>
+      <button class="btn" id="printBtn">${ICON.print} PDF / Print</button>
       <button class="btn" id="shareBtn">${ICON.share} Share</button>
     </div>
     <div class="status-row no-print" role="group" aria-label="My list">
@@ -458,7 +460,8 @@ function viewRecipe(id) {
   $("#cookBtn").onclick = () => cookMode(r, k);
   $("#planBtn").onclick = () => addToPlanDialog(id);
   $("#listBtn").onclick = () => { addToList([[r, k]]); toast(`Added ${r.g.length} ingredients to your shopping list`); };
-  $("#printBtn").onclick = () => window.print();
+  $("#printBtn").onclick = e => pdfOneRecipe(r, k, e.currentTarget);
+  warmPDF();
   $("#shareBtn").onclick = async () => {
     const url = location.href.split("#")[0] + "#/r/" + id;
     const text = `${r.t}\n\nIngredients:\n${r.g.map(g => "• " + g).join("\n")}\n\nDirections:\n${r.d.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n${url}`;
@@ -718,6 +721,7 @@ function viewPlan() {
         <span class="scaler" style="margin:0">People <button id="pMinus">−</button><b>${S.people}</b><button id="pPlus">+</button></span>
         <button class="btn" id="autoFill" title="Fill empty meals: favorites, liked and want-to-try first; never ones you didn't like">✨ Auto-fill empty meals</button>
         <button class="btn primary" id="planList">${ICON.cart} Make shopping list</button>
+        <button class="btn" id="planPdf">${ICON.print} PDF</button>
         <button class="btn" id="planClear">Clear week</button>
       </div>
     </div>
@@ -739,6 +743,12 @@ function viewPlan() {
   };
   $("#pMinus").onclick = () => { S.people = Math.max(1, S.people - 1); save(); viewPlan(); };
   $("#pPlus").onclick = () => { S.people = Math.min(20, S.people + 1); save(); viewPlan(); };
+  $("#planPdf").onclick = e => {
+    const btn = e.currentTarget;
+    modal(`<h3>Meal plan PDF</h3><p class="muted" style="margin-top:0">Just the week, or the week plus every recipe in it (one per page)?</p>
+      <div class="row" style="justify-content:flex-start"><button class="btn" data-mp="0">Week only</button><button class="btn primary" data-mp="1">Week + recipes</button><button class="btn" data-close>Cancel</button></div>`,
+      (m, close) => $$("[data-mp]", m).forEach(b => b.onclick = () => { close(); pdfMealPlan(btn, b.dataset.mp === "1"); }));
+  };
   $("#planClear").onclick = () => { if (confirm("Clear the whole week?")) { S.plan = {}; save(); viewPlan(); } };
   $("#autoFill").onclick = () => {
     const favs = new Set([...Object.keys(S.fav).map(Number), ...Object.keys(S.status).filter(k => S.status[k] !== "dis").map(Number)]), used = new Set();
@@ -813,7 +823,7 @@ function viewList() {
   const open = S.list.filter(x => !x.done).length;
   app.innerHTML = `<div class="list">
     <div class="plan-head"><div><h1 style="margin:0">Shopping list</h1><p class="muted" style="margin:4px 0 0">${open} to buy${S.list.length - open ? ` · ${S.list.length - open} checked` : ""}. Matching items from different recipes are combined.</p></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="lCopy">${ICON.share} Copy / share</button><button class="btn" id="lPrint">${ICON.print} Print</button><button class="btn" id="lDone">Remove checked</button><button class="btn" id="lAll">Clear all</button></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="lCopy">${ICON.share} Copy / share</button><button class="btn" id="lPrint">${ICON.print} PDF / Print</button><button class="btn" id="lDone">Remove checked</button><button class="btn" id="lAll">Clear all</button></div></div>
     <div class="addrow"><input class="inp" id="lNew" placeholder="Add an item, e.g. 2 dozen eggs"><button class="btn primary" id="lAdd">Add</button></div>
     ${S.list.length ? GORDER.map(g => { const its = S.list.map((x, i) => [x, i]).filter(([x]) => x.g === g); return its.length ? `<div class="grp"><h3>${g}</h3>${its.map(([x, i]) => `<label class="${x.done ? "done" : ""}"><input type="checkbox" data-li="${i}" ${x.done ? "checked" : ""}><span><b>${esc(qtyText(x))}</b> ${esc(x.name)}${x.from.length ? `<small>${esc(x.from.slice(0, 3).join(", "))}${x.from.length > 3 ? ` +${x.from.length - 3} more` : ""}</small>` : ""}</span><button class="x" data-lx="${i}" aria-label="Remove">✕</button></label>`).join("")}</div>` : ""; }).join("")
       : `<div class="empty"><b>Your list is empty</b>Open a recipe and tap “Add to shopping list”, or build a meal plan and tap “Make shopping list”.</div>`}
@@ -824,7 +834,7 @@ function viewList() {
   $("#lAdd").onclick = add; $("#lNew").onkeydown = e => { if (e.key === "Enter") add(); };
   $("#lDone").onclick = () => { S.list = S.list.filter(x => !x.done); save(); viewList(); };
   $("#lAll").onclick = () => { if (confirm("Clear the whole shopping list?")) { S.list = []; save(); viewList(); } };
-  $("#lPrint").onclick = () => window.print();
+  $("#lPrint").onclick = e => { if (!S.list.some(x => !x.done)) return toast("Nothing left to buy"); pdfShoppingList(e.currentTarget); };
   $("#lCopy").onclick = async () => { const t = listText() || "Shopping list is empty"; try { if (navigator.share) await navigator.share({ title: "Shopping list", text: t }); else { await navigator.clipboard.writeText(t); toast("List copied"); } } catch (e) {} };
 }
 
@@ -877,6 +887,220 @@ function viewPantry() {
     $("#pMore").onclick = more; more();
   }
 }
+
+/* ---------- PDF: recipes, lists, shopping list, meal plan (works on iPhone home-screen app, where Print is blocked) ---------- */
+let jsPDFLoad = null;
+function loadJsPDF() {
+  if (window.jspdf) return Promise.resolve(window.jspdf.jsPDF);
+  if (!jsPDFLoad) jsPDFLoad = new Promise((ok, bad) => {
+    const s = document.createElement("script"); s.src = "vendor/jspdf.umd.min.js";
+    s.onload = () => ok(window.jspdf.jsPDF); s.onerror = () => { jsPDFLoad = null; bad(new Error("PDF tool didn't load")); };
+    document.head.appendChild(s);
+  });
+  return jsPDFLoad;
+}
+const SITE_URL = location.origin + location.pathname.replace(/index\.html$/, "");
+// Built-in PDF fonts can't draw emoji or some symbols: swap them for plain text.
+const pdfText = s => String(s == null ? "" : s)
+  .replace(/≤/g, "<=").replace(/≥/g, ">=").replace(/[⏱✓✔]/g, "").replace(/→/g, "->").replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+  .replace(/[\u2028\u2029]/g, " ").replace(/[^\x09\x0A\x0D\x20-\x7E -ÿ–—•…€]/g, "").trim();
+const hexRGB = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+
+function pdfDoc(JsPDF) {
+  const doc = new JsPDF({ unit: "pt", format: "letter" });
+  const W = 612, H = 792, M = 46;
+  const st = { doc, W, H, M, y: M, page: 1 };
+  st.ensure = need => { if (st.y + need > H - 56) { st.newPage(); return true; } return false; };
+  st.newPage = () => { doc.addPage(); st.page++; st.y = M; };
+  st.text = (txt, size, opts = {}) => {
+    doc.setFont("helvetica", opts.bold ? "bold" : opts.italic ? "italic" : "normal"); doc.setFontSize(size);
+    doc.setTextColor(...(opts.color || [43, 37, 34]));
+    const x = opts.x || M, w = opts.w || (W - M - x);
+    const lines = doc.splitTextToSize(pdfText(txt), w), lh = size * (opts.lh || 1.32);
+    for (const ln of lines) { st.ensure(lh); doc.text(ln, x, st.y + size * 0.82); st.y += lh; }
+    return lines.length;
+  };
+  st.footer = () => {
+    const n = doc.getNumberOfPages();
+    for (let i = 1; i <= n; i++) {
+      doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(110, 98, 91);
+      doc.text("Easy Keto Carnivore Cookbook  ·  " + SITE_URL.replace(/^https?:\/\//, ""), M, H - 26);
+      doc.text(i + " / " + n, W - M, H - 26, { align: "right" });
+    }
+  };
+  return st;
+}
+
+function pdfRecipe(st, r, k = 1, withNotes = true) {
+  const { doc, W, M } = st, col = hexRGB(color(r)), serv = Math.round(r.s * k);
+  // header band
+  doc.setFont("helvetica", "bold"); doc.setFontSize(22);
+  const tl = doc.splitTextToSize(pdfText(r.t), W - 2 * M - 28);
+  const bandH = 44 + tl.length * 26;
+  st.ensure(bandH + 120);
+  doc.setFillColor(...col); doc.roundedRect(M, st.y, W - 2 * M, bandH, 8, 8, "F");
+  doc.setTextColor(255, 255, 255); doc.setFontSize(9); doc.setFont("helvetica", "bold");
+  doc.text(pdfText(`${D.meta.cats[r.c].toUpperCase()}  ·  RECIPE ${r.i}${r.b ? "  ·  BUDGET PICK" : ""}`), M + 14, st.y + 22);
+  doc.setFontSize(22); tl.forEach((ln, i) => doc.text(ln, M + 14, st.y + 48 + i * 26));
+  st.y += bandH + 14;
+  // facts
+  const facts = [["PREP", fmtT(r.p).replace("No cook", "None")], ["COOK", fmtT(r.k).replace("No cook", "None")], ["TOTAL", fmtT(r.tot)], ["SERVES", String(serv)]];
+  const fw = (W - 2 * M) / 4;
+  facts.forEach(([l, v], i) => {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(...col); doc.text(l, M + i * fw, st.y + 8);
+    doc.setFontSize(13); doc.setTextColor(43, 37, 34); doc.text(v, M + i * fw, st.y + 24);
+  });
+  st.y += 36;
+  // nutrition
+  doc.setFillColor(243, 236, 226); doc.roundedRect(M, st.y, W - 2 * M, 30, 6, 6, "F");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(...col); doc.text("PER SERVING (EST.)", M + 10, st.y + 18.5);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(43, 37, 34);
+  doc.text(pdfText(`${fmtK(r.n[0])} cal   ·   ${r.n[1]} g protein   ·   ${r.n[2]} g fat   ·   ${fmtC(r.n[3])} net carbs${r.u ? "   (" + r.u + ")" : ""}`), M + 118, st.y + 19.5);
+  st.y += 44;
+  const head = t => { st.ensure(40); doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(...col); doc.text(t, M, st.y + 9); st.y += 18; };
+  // ingredients
+  head("INGREDIENTS" + (k !== 1 ? `  (scaled to ${serv} servings)` : ""));
+  for (const g of r.g) {
+    const s = scaleLine(g, k), line = (s.q ? s.q + " " : "") + s.rest;
+    st.ensure(16); doc.setDrawColor(150, 140, 132); doc.setLineWidth(0.8); doc.rect(M + 2, st.y + 2.5, 8, 8);
+    st.text(line, 11, { x: M + 18, lh: 1.38 }); st.y += 2;
+  }
+  st.y += 8;
+  // directions
+  head("DIRECTIONS");
+  r.d.forEach((d, i) => {
+    st.ensure(22);
+    doc.setFillColor(...col); doc.circle(M + 8, st.y + 7, 8, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(255, 255, 255); doc.text(String(i + 1), M + 8, st.y + 10.4, { align: "center" });
+    st.text(d, 11, { x: M + 24, lh: 1.38 }); st.y += 6;
+  });
+  // tip
+  if (r.x) {
+    doc.setFont("helvetica", "italic"); doc.setFontSize(10.5);
+    const lines = doc.splitTextToSize(pdfText(r.x), W - 2 * M - 62), h = lines.length * 14 + 16;
+    st.ensure(h + 8);
+    doc.setFillColor(243, 236, 226); doc.roundedRect(M, st.y, W - 2 * M, h, 6, 6, "F"); doc.setFillColor(...col); doc.rect(M, st.y, 4, h, "F");
+    doc.setFont("helvetica", "bold"); doc.setTextColor(...col); doc.text("TIP", M + 14, st.y + 18);
+    doc.setFont("helvetica", "italic"); doc.setTextColor(43, 37, 34); lines.forEach((ln, i) => doc.text(ln, M + 42, st.y + 18 + i * 14));
+    st.y += h + 14;
+  }
+  // notes: the user's own notes, then lines to write on
+  if (withNotes) {
+    head("MY NOTES");
+    if (S.notes[r.i]) { st.text(S.notes[r.i], 11, { lh: 1.4 }); st.y += 4; }
+    const stars = S.rating[r.i] ? "Rating: " + "*".repeat(S.rating[r.i]) + "   " : "";
+    const made = (S.made[r.i] || []).length ? `Made ${(S.made[r.i] || []).length}x` : "";
+    if (stars || made) { st.text(stars + made, 9.5, { color: [110, 98, 91] }); st.y += 2; }
+    doc.setDrawColor(228, 218, 208); doc.setLineWidth(0.7);
+    for (let n = 0; n < 4 && st.y + 22 < st.H - 60; n++) { st.y += 22; doc.line(M, st.y, W - M, st.y); }
+  }
+}
+
+async function deliverPDF(st, filename, title) {
+  st.footer();
+  const blob = st.doc.output("blob");
+  const file = new File([blob], filename, { type: "application/pdf" });
+  const touch = matchMedia("(pointer: coarse)").matches;
+  if (touch && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title }); return; }
+    catch (e) {
+      if (e && e.name === "AbortError") return;           // user closed the share sheet
+      // Share needs a fresh tap (iOS): offer a button.
+      modal(`<h3>Your PDF is ready</h3><p class="muted" style="margin-top:0">${esc(filename)}</p>
+        <div class="row" style="justify-content:flex-start"><button class="btn primary" id="pdfShare">${ICON.share} Share / Print / Save</button><button class="btn" data-close>Close</button></div>`, (m, close) => {
+        $("#pdfShare", m).onclick = async () => { try { await navigator.share({ files: [file], title }); close(); } catch (x) { if (x.name !== "AbortError") openPDF(blob, filename); } };
+      });
+      return;
+    }
+  }
+  openPDF(blob, filename);
+}
+function openPDF(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank");
+  if (!w) { const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); }
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+}
+const safeName = s => pdfText(s).replace(/[^A-Za-z0-9 -]+/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "cookbook";
+async function withPDF(btn, work) {
+  const old = btn && btn.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = "Making PDF…"; }
+  try { const J = await loadJsPDF(); await work(J); }
+  catch (e) { console.warn(e); toast("Couldn't make the PDF: " + (e.message || e)); }
+  finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
+}
+
+function pdfOneRecipe(r, k, btn) {
+  return withPDF(btn, J => { const st = pdfDoc(J); pdfRecipe(st, r, k); return deliverPDF(st, safeName(r.t) + ".pdf", r.t); });
+}
+function pdfManyRecipes(list, title, btn) {
+  const MAX = 150;
+  if (list.length > MAX) toast(`Making the first ${MAX} of ${list.length} recipes`);
+  return withPDF(btn, J => {
+    const st = pdfDoc(J), { doc, W, M } = st, rs = list.slice(0, MAX);
+    // cover
+    doc.setFillColor(43, 37, 34); doc.rect(0, 0, W, st.H, "F");
+    doc.setTextColor(232, 201, 160); doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text("EASY KETO CARNIVORE", W / 2, 250, { align: "center" });
+    doc.setTextColor(255, 255, 255); doc.setFontSize(36); doc.splitTextToSize(pdfText(title), W - 120).forEach((ln, i) => doc.text(ln, W / 2, 300 + i * 42, { align: "center" }));
+    doc.setFont("helvetica", "normal"); doc.setFontSize(13); doc.setTextColor(216, 206, 196);
+    doc.text(`${rs.length} recipe${rs.length === 1 ? "" : "s"}  ·  ${new Date().toLocaleDateString()}`, W / 2, 420, { align: "center" });
+    // contents
+    st.newPage(); st.text("Contents", 24, { bold: true }); st.y += 8;
+    const tocStart = doc.getNumberOfPages(), rows = rs.map(r => r.t);
+    const perPage = 38, tocPages = Math.ceil(rows.length / perPage);
+    for (let p = 1; p < tocPages; p++) doc.addPage();
+    // recipes, one per page
+    const pageOf = [];
+    rs.forEach(r => { st.newPage(); pageOf.push(doc.getNumberOfPages()); pdfRecipe(st, r, 1); });
+    // fill contents now that page numbers are known
+    rows.forEach((t, i) => {
+      const p = tocStart + Math.floor(i / perPage), y = (p === tocStart ? 90 : M + 10) + (i % perPage) * 17;
+      doc.setPage(p); doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(43, 37, 34);
+      doc.text(doc.splitTextToSize(pdfText(`${i + 1}.  ${t}`), W - 2 * M - 40)[0], M, y);
+      doc.text(String(pageOf[i]), W - M, y, { align: "right" });
+      doc.link(M, y - 10, W - 2 * M, 14, { pageNumber: pageOf[i] });
+    });
+    doc.setPage(doc.getNumberOfPages());
+    return deliverPDF(st, safeName(title) + ".pdf", title);
+  });
+}
+function pdfShoppingList(btn) {
+  return withPDF(btn, J => {
+    const st = pdfDoc(J), { doc, M } = st;
+    st.text("Shopping list", 24, { bold: true }); st.text(new Date().toLocaleDateString(), 10, { color: [110, 98, 91] }); st.y += 10;
+    for (const g of GORDER) {
+      const its = S.list.filter(x => x.g === g && !x.done); if (!its.length) continue;
+      st.ensure(40); st.text(g.toUpperCase(), 10, { bold: true, color: [142, 44, 44] }); st.y += 4;
+      for (const x of its) {
+        st.ensure(18); doc.setDrawColor(150, 140, 132); doc.setLineWidth(0.9); doc.rect(M + 2, st.y + 2, 10, 10);
+        st.text([qtyText(x), x.name].filter(Boolean).join(" "), 12, { x: M + 22, lh: 1.45 });
+      }
+      st.y += 10;
+    }
+    return deliverPDF(st, "Shopping-list.pdf", "Shopping list");
+  });
+}
+function pdfMealPlan(btn, withRecipes) {
+  return withPDF(btn, J => {
+    const st = pdfDoc(J), { doc, W, M } = st, g = S.goals, used = [];
+    st.text("Meal plan", 24, { bold: true }); st.text(`Goals per day: ${g.kcal} cal · ${g.p} g protein · ${g.f} g fat · ${g.c} g net carbs`, 10, { color: [110, 98, 91] }); st.y += 8;
+    DAYS.forEach((d, di) => {
+      const rows = SLOTS.map(([s, n]) => [n, planItems(di, s).map(id => byId.get(id))]).filter(x => x[1].length);
+      st.ensure(30 + rows.length * 16);
+      doc.setDrawColor(228, 218, 208); doc.line(M, st.y, W - M, st.y); st.y += 8;
+      st.text(d, 14, { bold: true });
+      if (!rows.length) { st.text("Nothing planned", 10.5, { color: [110, 98, 91] }); st.y += 4; return; }
+      let t = [0, 0, 0, 0];
+      for (const [n, rs] of rows) { rs.forEach(r => { t = t.map((v, j) => v + r.n[j]); if (!used.includes(r)) used.push(r); }); st.text(`${n}: ${rs.map(r => r.t).join(", ")}`, 11, { x: M + 10 }); }
+      st.text(`Day total: ${Math.round(t[0])} cal · ${Math.round(t[1])} g protein · ${Math.round(t[2])} g fat · ${Math.round(t[3])} g net carbs`, 9.5, { x: M + 10, color: [110, 98, 91] });
+      st.y += 6;
+    });
+    if (withRecipes) used.forEach(r => { st.newPage(); pdfRecipe(st, r, 1, false); });
+    return deliverPDF(st, "Meal-plan.pdf", "Meal plan");
+  });
+}
+// Warm up the PDF tool in the background so the first tap is instant.
+const warmPDF = () => { if ("requestIdleCallback" in window) requestIdleCallback(() => loadJsPDF().catch(() => {})); else setTimeout(() => loadJsPDF().catch(() => {}), 1500); };
 
 /* ---------- settings ---------- */
 let installEvt = null;

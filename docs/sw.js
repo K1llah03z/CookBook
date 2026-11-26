@@ -1,9 +1,9 @@
 /* Easy Keto Carnivore Cookbook — service worker: works fully offline after the first visit.
    Bump VERSION whenever you change any site file so phones pick up the update. */
-const VERSION = "ekc-20261126-025020";
+const VERSION = "ekc-20261126-pdf";
 const CORE = ["./", "index.html", "styles.css", "app.js", "recipes.js", "config.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png",
-  "icons/apple-touch-icon.png", "icons/favicon-32.png"];
+  "icons/apple-touch-icon.png", "icons/favicon-32.png", "vendor/jspdf.umd.min.js"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
