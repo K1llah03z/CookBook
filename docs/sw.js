@@ -1,16 +1,25 @@
-/* Easy Keto Carnivore Cookbook — service worker: works fully offline after the first visit.
-   Bump VERSION whenever you change any site file so phones pick up the update. */
-const VERSION = "ekc-20261126-notes3";
+/* Easy Keto Carnivore Cookbook — service worker: offline copy + updates.
+   VERSION is year.month.DDNN: day of the month + that day's build number (example: 2026.12.501 = Dec 5, build 1).
+   publish.ps1 sets it for you. Any change to this file tells phones an update is available. */
+const VERSION = "2026.11.2601";
+const CACHE = "ekc-" + VERSION;
 const CORE = ["./", "index.html", "styles.css", "app.js", "recipes.js", "config.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png",
   "icons/apple-touch-icon.png", "icons/favicon-32.png", "vendor/jspdf.umd.min.js"];
 
+// Download the new version's files fresh (skip the browser's own cache), then wait.
+// The app shows "Update now"; the switch happens when you tap it or next time the app starts.
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE.map(u => new Request(u, { cache: "reload" })))));
 });
 self.addEventListener("activate", e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k))))
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
+});
+self.addEventListener("message", e => {
+  const d = e.data || {};
+  if (d.type === "version" && e.ports[0]) e.ports[0].postMessage({ version: VERSION });
+  if (d.type === "skipWaiting") self.skipWaiting();
 });
 self.addEventListener("fetch", e => {
   const req = e.request;
@@ -19,12 +28,12 @@ self.addEventListener("fetch", e => {
   if (req.url.endsWith(".pdf")) return;
   // Pages: network first so updates show up, cached copy when offline.
   if (req.mode === "navigate") {
-    e.respondWith(fetch(req).then(res => { const c = res.clone(); caches.open(VERSION).then(x => x.put("index.html", c)); return res; })
+    e.respondWith(fetch(req).then(res => { const c = res.clone(); caches.open(CACHE).then(x => x.put("index.html", c)); return res; })
       .catch(() => caches.match("index.html")));
     return;
   }
   // Everything else: cached copy right away, refreshed in the background.
-  e.respondWith(caches.open(VERSION).then(cache => cache.match(req, { ignoreSearch: true }).then(hit => {
+  e.respondWith(caches.open(CACHE).then(cache => cache.match(req, { ignoreSearch: true }).then(hit => {
     const net = fetch(req).then(res => { if (res.ok) cache.put(req, res.clone()); return res; }).catch(() => hit);
     return hit || net;
   })));

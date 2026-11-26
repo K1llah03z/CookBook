@@ -1120,6 +1120,9 @@ function viewSettings() {
     <div class="box"><h3>Install on your phone</h3>
       ${standalone ? `<p>✓ Running as an installed app.</p>` : ios ? `<p>On iPhone or iPad: open this site in <b>Safari</b>, tap the <b>Share</b> button, then <b>Add to Home Screen</b>.</p>` : `<p>Add the cookbook to your home screen. It opens full screen and works with no internet.</p><button class="btn primary" id="install" ${installEvt ? "" : "disabled"}>Install app</button>${installEvt ? "" : `<p class="muted" style="font-size:13px">If the button is grayed out, use your browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.</p>`}`}
       <p class="muted" style="font-size:13px" id="offline">${navigator.serviceWorker && navigator.serviceWorker.controller ? "✓ Saved for offline use." : "Offline copy will be ready after this first visit finishes loading."}</p></div>
+    <div class="box"><h3>App version</h3>
+      <p style="margin:0 0 10px">Version <b id="appVer">…</b></p>
+      <button class="btn" id="updCheck">Check for updates</button></div>
     <div class="box"><h3>Timer alerts</h3>
       ${!PUSH ? `<p class="muted" style="margin:0">Timers alert you while the app is open. To get alerts even when it's closed, run <b>setup-push.ps1</b> once (see README).</p>`
         : S.pushOn ? `<p style="margin-top:0">🔔 On for this device. Alerts arrive on the lock screen even when the app is closed.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="pTest">Send a test alert</button><button class="btn" id="pOff">Turn off</button></div>`
@@ -1134,6 +1137,8 @@ function viewSettings() {
       <p class="muted" style="font-size:13px">${Object.keys(S.fav).length} favorites · ${Object.keys(S.status).length} in want-to-try / tried lists · ${Object.keys(S.notes).length} notes · ${Object.keys(S.rating).length} ratings · ${Object.values(S.made).reduce((a, b) => a + b.length, 0)} cooks logged</p></div>
     <div class="box helpbox"><h3>Search tips</h3>${searchHelp()}</div>
   </div>`;
+  swVersion(navigator.serviceWorker && navigator.serviceWorker.controller).then(v => { const el = $("#appVer"); if (el) el.textContent = v || "(older version: tap Check for updates)"; });
+  $("#updCheck").onclick = () => checkForUpdate(true);
   if ($("#pOn")) $("#pOn").onclick = async () => { await enablePush(); viewSettings(); };
   if ($("#pOff")) $("#pOff").onclick = async () => { await disablePush(); viewSettings(); };
   if ($("#pTest")) $("#pTest").onclick = pushTest;
@@ -1208,12 +1213,51 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if
 fetch("Easy_Keto_Carnivore_Cookbook.pdf", { method: "HEAD" }).then(r => { if (r.ok) $("#pdfLink").innerHTML = ` · <a href="Easy_Keto_Carnivore_Cookbook.pdf" download>Download the printable PDF</a>`; }).catch(() => {});
 
 /* ---------- offline (service worker) ---------- */
+/* ---------- updates: "Update now" banner + version number ---------- */
+let swReg = null, wantReload = false;
+function swVersion(worker) {
+  return new Promise(res => {
+    if (!worker) return res(null);
+    const ch = new MessageChannel(); const t = setTimeout(() => res(null), 1500);
+    ch.port1.onmessage = e => { clearTimeout(t); res(e.data && e.data.version); };
+    try { worker.postMessage({ type: "version" }, [ch.port2]); } catch (e) { clearTimeout(t); res(null); }
+  });
+}
+async function showUpdate(worker) {
+  if (!worker || !navigator.serviceWorker.controller) return;   // first visit: nothing to update from
+  const v = await swVersion(worker);
+  let bar = document.getElementById("updBar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "updBar"; bar.className = "updbar"; bar.setAttribute("role", "status"); document.body.appendChild(bar); }
+  bar.innerHTML = `<span>✨ New version${v ? " <b>" + esc(v) + "</b>" : ""} is ready</span><button class="btn sm primary" id="updNow">Update now</button><button class="btn sm" id="updLater" aria-label="Later">Later</button>`;
+  $("#updNow").onclick = () => {
+    wantReload = true; $("#updNow").textContent = "Updating…"; $("#updNow").disabled = true;
+    worker.postMessage({ type: "skipWaiting" });
+    setTimeout(() => location.reload(), 4000);                  // safety net if the switch signal is missed
+  };
+  $("#updLater").onclick = () => bar.remove();                  // it will load next time the app starts
+}
+async function checkForUpdate(manual) {
+  if (!swReg) { if (manual) toast("Updates aren't available here"); return; }
+  if (swReg.waiting) return showUpdate(swReg.waiting);
+  try { await swReg.update(); } catch (e) { if (manual) toast("Couldn't check: no internet?"); return; }
+  const w = swReg.installing || swReg.waiting;
+  if (!w) { if (manual) toast("You're on the latest version"); return; }
+  if (w.state === "installed") return showUpdate(w);
+  if (manual) toast("Downloading the update…");
+  w.addEventListener("statechange", () => { if (w.state === "installed") showUpdate(w); });
+}
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (wantReload) { wantReload = false; location.reload(); } });
   navigator.serviceWorker.register("sw.js").then(reg => {
+    swReg = reg;
+    if (reg.waiting) showUpdate(reg.waiting);
     reg.addEventListener("updatefound", () => {
       const w = reg.installing;
-      w && w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) toast("Update ready: it will load next time you open the app"); });
+      w && w.addEventListener("statechange", () => { if (w.state === "installed") showUpdate(w); });
     });
+    // Coming back to the app after a while? Check for a newer version.
+    let lastCheck = Date.now();
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - lastCheck > 10 * 60 * 1000) { lastCheck = Date.now(); reg.update().catch(() => {}); } });
   }).catch(() => {});
 }
 
