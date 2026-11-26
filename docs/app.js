@@ -473,7 +473,7 @@ function stepHTML(s, label) {
 /* ---------- doneness toggle (steaks, chops, roasts) ---------- */
 // "pull" is when to take it off the heat; it rises about 5F while resting to "final".
 const DONENESS = {
-  whole: { label: "Beef, lamb & game", def: "mr", levels: [
+  whole: { label: "Beef, lamb & game", def: "mw", base: "mr", levels: [
     ["rare", "Rare", 120, 125, "cool red center"], ["mr", "Medium-rare", 130, 135, "warm red center"], ["med", "Medium", 140, 145, "warm pink center (USDA 145F)"],
     ["mw", "Medium-well", 145, 150, "slight pink"], ["well", "Well done", 155, 160, "no pink"]] },
   pork: { label: "Pork chops & loin", def: "p145", levels: [
@@ -502,7 +502,7 @@ function donenessLevel(id, kind) {
 function fmtHr(h) { const q = Math.round(h * 4) / 4; return (q % 1 ? String(q) : String(q)) + (q === 1 ? " hour" : " hours"); }
 // Returns a copy of r with temperatures, times, and wording set for the chosen doneness.
 function applyDoneness(r, kind, lvl) {
-  const D = DONENESS[kind], base = D.levels.find(l => l[0] === D.def), delta = lvl[2] - base[2];
+  const D = DONENESS[kind], base = D.levels.find(l => l[0] === (D.base || D.def)), delta = lvl[2] - base[2];
   const lo = kind === "pork" ? 128 : 110, hi = kind === "pork" ? 150 : kind === "duck" ? 142 : 150;
   const factor = Math.max(0.7, 1 + delta * 0.025);
   let hadTemp = false;
@@ -1613,7 +1613,7 @@ function viewGuide() {
       <p class="muted" style="font-size:13px;margin-bottom:0">Check the thickest part with an instant-read thermometer, away from the bone.</p></div>
     <div class="box"><h3>🥩 Doneness for steaks, chops and roasts</h3>
       <table class="temps"><tr><td><b>Level</b></td><td><b>Pull at</b></td><td><b>After resting</b></td></tr>${DONENESS.whole.levels.map(l => `<tr><td>${l[1]}<br><span class="muted" style="font-size:12.5px">${esc(l[4])}</span></td><td>${l[2]}°F</td><td>${l[3]}°F</td></tr>`).join("")}</table>
-      <p class="muted" style="font-size:13px;margin-bottom:0">Pork chops and loin: 145°F (faint pink) to 160°F (well done). Pick your doneness on any steak, chop, or roast recipe and the steps update. The app remembers your choice.</p></div>
+      <p class="muted" style="font-size:13px;margin-bottom:0">Pork chops and loin: 145°F (faint pink) to 160°F (well done). Steaks, chops, and roasts start at medium-well. Pick a different doneness on any of them and the steps update; the app remembers your choice.</p></div>
     <div class="box"><h3>🥚 Raw and lightly cooked eggs</h3>
       <p style="margin:0">A few recipes use raw or lightly cooked yolks (mayo, hollandaise, some desserts). Use pasteurized eggs for children, pregnant women, older adults, or anyone with a weak immune system.</p></div>
     <div class="box"><h3>🧺 Pantry staples</h3><ul>
