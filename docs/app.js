@@ -1254,10 +1254,10 @@ function syncStatusText() {
   const sy = S.sync || {};
   if (!SYNC_ON()) return "Off";
   const ago = sy.last ? Math.max(0, Math.round((Date.now() - sy.last) / 60000)) : null;
-  return `🔄 On${sy.last ? ` · last synced ${ago < 1 ? "just now" : ago + " min ago"}` : " · syncing…"}${sy.err ? ` · <span style="color:#c44">problem: ${esc(sy.err)}</span>` : ""}`;
+  return `${sy.mode === "passkey" ? "🔑 On with your Apple account passkey" : "🔄 On with a sync code"}${sy.last ? ` · last synced ${ago < 1 ? "just now" : ago + " min ago"}` : " · syncing…"}${sy.err ? ` · <span style="color:#c44">problem: ${esc(sy.err)}</span>` : ""}`;
 }
-async function syncStart(code, fresh) {
-  S.sync = { code: fmtCode(code), dev: (S.sync && S.sync.dev) || toHex(crypto.getRandomValues(new Uint8Array(8))), on: true, rev: 0, meta: {}, fresh, last: 0, err: "" };
+async function syncStart(code, fresh, mode) {
+  S.sync = { code: fmtCode(code), mode: mode || "code", dev: (S.sync && S.sync.dev) || toHex(crypto.getRandomValues(new Uint8Array(8))), on: true, rev: 0, meta: {}, fresh, last: 0, err: "" };
   syncKeyCache = null; save();
   toast(fresh ? "Joining… merging this device's data" : "Sync is on");
   await syncNow();
@@ -1269,7 +1269,7 @@ async function showSyncCode() {
   const code = S.sync.code, link = SITE_URL + "#/sync/" + normCode(code);
   let svg = "";
   try { const Q = await loadQR(); const q = Q(0, "M"); q.addData(link); q.make(); svg = q.createSvgTag({ cellSize: 5, margin: 3, scalable: true }); } catch (e) {}
-  modal(`<h3>Your sync code</h3>
+  modal(`<h3>Your sync code</h3>${S.sync.mode === "passkey" ? `<p style="margin-top:0">🔑 This code comes from your passkey. Apple devices on your account don't need it; use it for a Windows PC or to share with family.</p>` : ""}
     <p class="muted" style="margin-top:0">Use it on your other devices. Anyone with this code can see and change your cookbook data, so only share it with devices you trust.</p>
     <div style="font:700 clamp(15px,5.2vw,26px) ui-monospace,Menlo,Consolas,monospace;letter-spacing:.04em;text-align:center;margin:10px 0;white-space:nowrap;user-select:all">${esc(code)}</div>
     ${svg ? `<div class="qrbox">${svg}</div><p class="muted" style="font-size:12.5px;text-align:center">Scan with the other device's camera (iPad, PC, Android). On an iPhone Home Screen app, type or paste the code instead.</p>` : ""}
@@ -1298,14 +1298,19 @@ function syncBoxHTML() {
   if (!PUSH) return `<p class="muted" style="margin:0">Sync uses your timer-alert server. Run <b>setup-push.ps1</b> once to turn it on.</p>`;
   if (!SYNC_ON()) return `<p style="margin-top:0">Keep favorites, lists, notes, ratings, meal plans and the shopping list the same on your phone, iPad and computer. Encrypted on this device before it's sent.</p>
     ${S.sync && S.sync.code ? `<p class="muted" style="font-size:13px">Sync is paused on this device.</p>` : ""}
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="sNew">Turn on sync (first device)</button><button class="btn" id="sJoin">Join with a code</button></div>`;
+    ${passkeyPossible() ? `<button class="btn primary" id="sPk" style="margin-bottom:8px">🔑 Sync with my Apple account</button>
+    <p class="muted" style="font-size:12.5px;margin:0 0 12px">Uses a passkey in your iCloud Keychain, so your iPhone, iPad and Mac on the same Apple account sync after Face ID / Touch ID. No code to type. Needs iOS 18 / macOS 15 or newer.</p>
+    <p class="muted" style="font-size:12.5px;margin:0 0 6px">Or use a sync code (works on any device, including Windows):</p>` : ""}
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ${passkeyPossible() ? "" : "primary"}" id="sNew">Turn on with a sync code</button><button class="btn" id="sJoin">Join with a code</button></div>`;
   return `<p style="margin-top:0" id="syncStatus">${syncStatusText()}</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="sNow">Sync now</button><button class="btn" id="sShow">Show my sync code</button><button class="btn" id="sChange">Change sync code</button><button class="btn" id="sOff">Turn off on this device</button></div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:0">Timers, alerts and dark mode stay per device.</p>`;
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="sNow">Sync now</button><button class="btn" id="sShow">Show my sync code</button>${S.sync.mode !== "passkey" && passkeyPossible() ? `<button class="btn" id="sToPk">🔑 Switch to Apple account passkey</button>` : ""}<button class="btn" id="sChange">${S.sync.mode === "passkey" ? "Switch to a new sync code" : "Change sync code"}</button><button class="btn" id="sOff">Turn off on this device</button></div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:0">${S.sync.mode === "passkey" ? "Other Apple devices: Settings → Sync with my Apple account. Windows PC or family: Show my sync code. " : ""}Timers, alerts and dark mode stay per device.</p>`;
 }
 function bindSyncBox() {
   if ($("#sNew")) $("#sNew").onclick = async () => { await syncStart(newCode(), false); viewSettings(); if (!S.sync.err) showSyncCode(); };
   if ($("#sJoin")) $("#sJoin").onclick = () => joinDialog("");
+  if ($("#sPk")) $("#sPk").onclick = passkeySync;
+  if ($("#sToPk")) $("#sToPk").onclick = () => { if (confirm("Switch this sync to your Apple account passkey? If you already made a cookbook passkey, pick it; otherwise one is created. Your data is merged into it, and other devices then tap “Sync with my Apple account”.")) passkeyFirst(true); };
   if ($("#sNow")) $("#sNow").onclick = () => syncNow(true);
   if ($("#sShow")) $("#sShow").onclick = showSyncCode;
   if ($("#sOff")) $("#sOff").onclick = () => { if (confirm("Stop syncing on this device? Your data stays here; other devices keep syncing.")) { S.sync.on = false; clearInterval(syncPoll); save(); viewSettings(); } };
@@ -1314,6 +1319,71 @@ function bindSyncBox() {
     try { const K = await syncKeys(); await fetch(PUSH + "/sync/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: K.id }) }); } catch (e) {}
     await syncStart(newCode(), false); viewSettings(); showSyncCode();
   };
+}
+
+/* ---------- passkey sync: "Sync with my Apple account" ----------
+   A passkey saved in iCloud Keychain (or Google Password Manager) is available on every device signed into the
+   same account. The passkey's PRF extension gives a secret that only that passkey can produce (after Face ID /
+   Touch ID); we turn it into the sync code, so all devices with the passkey open the same encrypted locker.
+   Needs iOS/iPadOS 18+, macOS 15+ Safari, or a recent Chrome/Edge. The sync code still works as a backup. */
+const PRF_SALT = new TextEncoder().encode("ekc-sync-prf-v1/cookbook-sync-secret");
+const passkeyPossible = () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext && PUSH);
+const codeFromPRF = buf => { const b = new Uint8Array(buf); let s = ""; for (let i = 0; i < 20; i++) s += B32[b[i] % 31]; return fmtCode(s); };
+const rnd = n => crypto.getRandomValues(new Uint8Array(n));
+async function passkeyGet(allowIds) {
+  const a = await navigator.credentials.get({ publicKey: {
+    challenge: rnd(32), rpId: location.hostname, userVerification: "required", timeout: 120000,
+    allowCredentials: (allowIds || []).map(id => ({ type: "public-key", id })),
+    extensions: { prf: { eval: { first: PRF_SALT } } } } });
+  const r = a.getClientExtensionResults ? a.getClientExtensionResults() : {};
+  const out = r.prf && r.prf.results && r.prf.results.first;
+  if (!out) throw Object.assign(new Error("This device's passkeys can't do sync yet (needs iOS 18 / macOS 15 or newer)."), { code: "noprf" });
+  return codeFromPRF(out);
+}
+async function passkeyCreate() {
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { name: "Easy Keto Carnivore", id: location.hostname },
+    user: { id: rnd(16), name: "Cookbook sync", displayName: "Easy Keto Carnivore (sync)" },
+    challenge: rnd(32),
+    pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+    authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
+    timeout: 120000,
+    extensions: { prf: { eval: { first: PRF_SALT } } } } });
+  const ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
+  if (!ext.prf || ext.prf.enabled === false) throw Object.assign(new Error("This device's passkeys can't do sync yet (needs iOS 18 / macOS 15 or newer). Use a sync code instead."), { code: "noprf" });
+  if (ext.prf.results && ext.prf.results.first) return codeFromPRF(ext.prf.results.first);
+  toast("One more Face ID / Touch ID to finish…");
+  return passkeyGet([cred.rawId]);                       // some devices only give the secret when signing in
+}
+const pkErr = e => e && e.code === "noprf" ? e.message : e && e.name === "NotAllowedError" ? "Cancelled, or no passkey chosen." : e && e.name === "InvalidStateError" ? "A cookbook passkey already exists on this device. Use “Sync with my Apple account”." : "Passkey didn't work: " + ((e && e.message) || e);
+// Main button: use an existing cookbook passkey; if there isn't one, offer to make it.
+async function passkeySync() {
+  try {
+    const code = await passkeyGet();
+    if (SYNC_ON() && normCode(S.sync.code) === normCode(code)) { toast("Already synced with this passkey"); return; }
+    await syncStart(code, true, "passkey");
+    toast(S.sync.err ? "Couldn't reach the sync server: " + S.sync.err : "Synced with your Apple account passkey 🔑");
+    viewSettings();
+  } catch (e) {
+    if (e && e.code === "noprf") { toast(e.message); return; }
+    modal(`<h3>No cookbook passkey yet?</h3>
+      <p class="muted" style="margin-top:0">If this is the first device you're setting up, create a passkey. It's saved in your iCloud Keychain (or Google Password Manager), so your other devices signed into the same account can use it.</p>
+      <div class="row"><button class="btn" data-close>Cancel</button><button class="btn primary" id="pkCreate">Create passkey</button></div>`, (m, close) => {
+      $("#pkCreate", m).onclick = async () => { close(); await passkeyFirst(); };
+    });
+  }
+}
+async function passkeyFirst(tryExisting) {
+  try {
+    let code = null;
+    if (tryExisting) code = await passkeyGet().catch(e => { if (e && e.code === "noprf") throw e; return null; });
+    if (!code) code = await passkeyCreate();
+    const old = SYNC_ON() ? await syncKeys().catch(() => null) : null;
+    await syncStart(code, false, "passkey");
+    if (old && old.id !== (await syncKeys()).id) fetch(PUSH + "/sync/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: old.id }) }).catch(() => {});
+    toast(S.sync.err ? "Couldn't reach the sync server: " + S.sync.err : "Passkey sync is on 🔑 Your other Apple devices can now tap “Sync with my Apple account”.");
+    viewSettings();
+  } catch (e) { toast(pkErr(e)); }
 }
 
 /* ---------- settings ---------- */
