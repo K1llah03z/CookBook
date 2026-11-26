@@ -281,3 +281,7 @@ footer.foot{max-width:1280px;margin:0 auto;padding:20px 16px 40px;color:var(--mu
 .updbar span{flex:1;min-width:0;line-height:1.3}
 .updbar .btn{border-color:transparent}
 .updbar #updLater{background:transparent;color:var(--bg);border:1px solid rgba(255,255,255,.3)}
+
+/* sync QR */
+.qrbox{display:flex;justify-content:center;margin:6px auto}
+.qrbox svg{width:200px;height:200px;background:#fff;border-radius:10px}

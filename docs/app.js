@@ -23,7 +23,7 @@ const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, mad
 let S;
 try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
 let saveT;
-function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full"); } }, 120); counts(); }
+function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save: storage is full"); } }, 120); counts(); if (window.__syncSoon) window.__syncSoon(); }
 function counts() {
   const f = Object.keys(S.fav).length, l = S.list.filter(x => !x.done).length;
   const mine = f + Object.keys(S.status).filter(k => S.status[k] === "want").length;
@@ -375,12 +375,13 @@ function stepHTML(s, label) {
 let curServ = {};
 let shownRecipe = null;
 function viewRecipe(id) {
-  const keepY = shownRecipe === id && location.hash.startsWith("#/r/" + id) && document.querySelector(".recipe") ? window.scrollY : null;
+  const same = shownRecipe === id && location.hash.startsWith("#/r/" + id) && !!document.querySelector(".recipe");
+  const keepY = same ? window.scrollY : null;
   shownRecipe = id;
   const r = byId.get(id);
   if (!r) { app.innerHTML = `<div class="empty"><b>Recipe not found</b><a href="#/">Back to recipes</a></div>`; return; }
   setTab("");
-  S.recent = [id, ...S.recent.filter(x => x !== id)].slice(0, 30); save();
+  if (!same && S.recent[0] !== id) { S.recent = [id, ...S.recent.filter(x => x !== id)].slice(0, 30); save(); }
   const serv = curServ[id] || r.s, k = serv / r.s, c = color(r);
   const { list } = results();
   const pos = list.findIndex(x => x.i === id);
@@ -1109,6 +1110,212 @@ function pdfMealPlan(btn, withRecipes) {
 // Warm up the PDF tool in the background so the first tap is instant.
 const warmPDF = () => { if ("requestIdleCallback" in window) requestIdleCallback(() => loadJsPDF().catch(() => {})); else setTimeout(() => loadJsPDF().catch(() => {}), 1500); };
 
+/* ---------- sync between devices (end-to-end encrypted, via the same Cloudflare server) ----------
+   The sync code never leaves the device. From it we derive:
+     id   = SHA-256 hash  -> names the locker on the server
+     aes  = AES-GCM key   -> encrypts every item before upload
+     mac  = HMAC key      -> turns item names ("fav:143") into opaque labels
+   Each favorite / note / rating / plan slot / shopping item is its own item. Newest change wins. */
+const SYNC_ON = () => !!(PUSH && S.sync && S.sync.code && S.sync.on);
+const B32 = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";            // no I, L, O, 0, 1 (easy to read and type)
+const normCode = c => String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const fmtCode = c => normCode(c).match(/.{1,4}/g).join("-");
+const validCode = c => normCode(c).length === 20 && [...normCode(c)].every(ch => B32.includes(ch));
+function newCode() { const r = crypto.getRandomValues(new Uint8Array(20)); return fmtCode([...r].map(x => B32[x % 31]).join("")); }
+const enc8 = new TextEncoder(), dec8 = new TextDecoder();
+const toHex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+const toB64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const fromB64u = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+let syncKeyCache = null;
+async function syncKeys() {
+  const code = normCode(S.sync.code);
+  if (syncKeyCache && syncKeyCache.code === code) return syncKeyCache;
+  const id = toHex(await crypto.subtle.digest("SHA-256", enc8.encode("ekc-sync-v1|id|" + code)));
+  const base = await crypto.subtle.importKey("raw", enc8.encode(code), "PBKDF2", false, ["deriveKey", "deriveBits"]);
+  const aes = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: enc8.encode("ekc-sync-v1|enc"), iterations: 150000, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const macBits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: enc8.encode("ekc-sync-v1|name"), iterations: 150000, hash: "SHA-256" }, base, 256);
+  const mac = await crypto.subtle.importKey("raw", macBits, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return (syncKeyCache = { code, id, aes, mac, names: new Map() });
+}
+async function itemLabel(K, name) {
+  if (!K.names.has(name)) K.names.set(name, toB64u((await crypto.subtle.sign("HMAC", K.mac, enc8.encode(name))).slice(0, 18)));
+  return K.names.get(name);
+}
+async function seal(K, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, K.aes, enc8.encode(JSON.stringify(obj)));
+  const out = new Uint8Array(12 + ct.byteLength); out.set(iv); out.set(new Uint8Array(ct), 12);
+  return toB64u(out);
+}
+async function unseal(K, s) {
+  const b = fromB64u(s);
+  return JSON.parse(dec8.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.slice(0, 12) }, K.aes, b.slice(12))));
+}
+const fnv = str => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
+
+// What syncs: everything except device-only things (timers, alert setting, theme, the sync settings).
+function flattenState() {
+  const f = {};
+  for (const [pre, obj] of [["fav", S.fav], ["status", S.status], ["notes", S.notes], ["rating", S.rating], ["made", S.made]])
+    for (const k in obj) f[pre + ":" + k] = obj[k];
+  for (const d in S.plan) for (const sl in S.plan[d]) if ((S.plan[d][sl] || []).length) f["plan:" + d + ":" + sl] = S.plan[d][sl];
+  for (const it of S.list) f["list:" + it.key] = it;
+  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent;
+  return f;
+}
+function applyFlat(f) {
+  const fav = {}, status = {}, notes = {}, rating = {}, made = {}, plan = {}, list = [];
+  const maps = { fav, status, notes, rating, made };
+  for (const [n, v] of Object.entries(f)) {
+    const [pre, a, b] = n.split(":");
+    if (maps[pre] && a !== undefined) maps[pre][n.slice(pre.length + 1)] = v;
+    else if (pre === "plan") ((plan[a] = plan[a] || {})[b] = v);
+    else if (pre === "list") list.push(v);
+  }
+  const order = new Map(S.list.map((x, i) => [x.key, i]));
+  list.sort((x, y) => (order.has(x.key) ? order.get(x.key) : 1e9) - (order.has(y.key) ? order.get(y.key) : 1e9));
+  Object.assign(S, { fav, status, notes, rating, made, plan, list });
+  for (const k of ["pantry", "pantryFats", "goals", "people", "recent"]) if (k in f) S[k] = f[k];
+}
+let syncBusy = false, syncAgain = false, syncT = null, syncPoll = null;
+window.__syncSoon = () => { if (!SYNC_ON() || syncApplying) return; clearTimeout(syncT); syncT = setTimeout(() => syncNow(), 1500); };
+let syncApplying = false;
+function quietSave() { syncApplying = true; try { save(); } finally { syncApplying = false; } }
+async function syncNow(manual) {
+  if (!SYNC_ON()) return;
+  if (syncBusy) { syncAgain = true; return; }
+  if (!navigator.onLine) { if (manual) toast("You're offline. Changes will sync when you're back online."); return; }
+  syncBusy = true;
+  try {
+    const K = await syncKeys(), sy = S.sync, meta = sy.meta || (sy.meta = {}), now = Date.now();
+    // 1. find local changes
+    const flat = flattenState(), out = [];
+    for (const [n, v] of Object.entries(flat)) { const h = fnv(JSON.stringify(v)); const m = meta[n]; if (!m || m.h !== h) meta[n] = { t: sy.fresh ? 1 : now, h, d: 1 }; }
+    for (const n in meta) if (!(n in flat) && meta[n].h !== "-") meta[n] = { t: now, h: "-", d: 1 };
+    sy.fresh = false;
+    for (const n in meta) if (meta[n].d) out.push(n);
+    // 2. send in batches, receive what other devices changed
+    let since = sy.rev || 0, incoming = [], first = true;
+    for (let i = 0; first || i < out.length; i += 300) {
+      first = false;
+      const batch = out.slice(i, i + 300);
+      const items = await Promise.all(batch.map(async n => ({ k: await itemLabel(K, n), t: meta[n].t, ct: await seal(K, { n, v: meta[n].h === "-" ? null : flat[n] }) })));
+      const r = await fetch(PUSH + "/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: K.id, dev: sy.dev, since, items }) });
+      if (r.status === 410) { sy.on = false; quietSave(); toast("Your sync code was changed on another device. Enter the new code in Settings to keep syncing."); return; }
+      if (!r.ok) throw new Error("server " + r.status);
+      const res = await r.json();
+      batch.forEach(n => { if (meta[n] && meta[n].d) delete meta[n].d; });
+      incoming = incoming.concat(res.items || []); sy.rev = res.rev; sy.count = res.count;
+      if (i + 300 >= out.length) break;
+    }
+    // 3. apply newer remote changes
+    let changed = 0;
+    if (incoming.length) {
+      const cur = flattenState();
+      for (const it of incoming) {
+        let o; try { o = await unseal(K, it.ct); } catch (e) { continue; }
+        const m = meta[o.n];
+        if (m && m.t >= it.t) continue;                      // ours is the same or newer
+        if (o.v === null) { delete cur[o.n]; meta[o.n] = { t: it.t, h: "-" }; }
+        else { cur[o.n] = o.v; meta[o.n] = { t: it.t, h: fnv(JSON.stringify(o.v)) }; }
+        changed++;
+      }
+      if (changed) { syncApplying = true; applyFlat(cur); syncApplying = false; }
+    }
+    sy.last = Date.now(); sy.err = "";
+    quietSave();
+    if (changed) refreshAfterSync();
+    if (manual) toast(changed ? `Synced: ${changed} update${changed === 1 ? "" : "s"} from your other devices` : "Everything is in sync");
+  } catch (e) {
+    S.sync.err = String(e.message || e); quietSave();
+    if (manual) toast("Sync didn't work: " + S.sync.err);
+  } finally {
+    syncBusy = false;
+    if (syncAgain) { syncAgain = false; setTimeout(() => syncNow(), 300); }
+    const st = document.getElementById("syncStatus"); if (st) st.innerHTML = syncStatusText();
+  }
+}
+function refreshAfterSync() {
+  counts();
+  const a = document.activeElement;
+  if (a && /textarea|input|select/i.test(a.tagName) && app.contains(a)) return;   // don't redraw under someone typing
+  if (document.querySelector(".modal-bg,.cook")) return;
+  const y = window.scrollY; route(); window.scrollTo({ top: y, behavior: "instant" });
+}
+function startSyncLoop() {
+  clearInterval(syncPoll);
+  if (!SYNC_ON()) return;
+  syncNow();
+  syncPoll = setInterval(() => { if (!document.hidden) syncNow(); }, 30000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && SYNC_ON()) syncNow(); });
+window.addEventListener("online", () => { if (SYNC_ON()) syncNow(); });
+function syncStatusText() {
+  const sy = S.sync || {};
+  if (!SYNC_ON()) return "Off";
+  const ago = sy.last ? Math.max(0, Math.round((Date.now() - sy.last) / 60000)) : null;
+  return `🔄 On${sy.last ? ` · last synced ${ago < 1 ? "just now" : ago + " min ago"}` : " · syncing…"}${sy.err ? ` · <span style="color:#c44">problem: ${esc(sy.err)}</span>` : ""}`;
+}
+async function syncStart(code, fresh) {
+  S.sync = { code: fmtCode(code), dev: (S.sync && S.sync.dev) || toHex(crypto.getRandomValues(new Uint8Array(8))), on: true, rev: 0, meta: {}, fresh, last: 0, err: "" };
+  syncKeyCache = null; save();
+  toast(fresh ? "Joining… merging this device's data" : "Sync is on");
+  await syncNow();
+  startSyncLoop();
+}
+let qrLoad = null;
+function loadQR() { if (window.qrcode) return Promise.resolve(window.qrcode); return qrLoad || (qrLoad = new Promise((ok, bad) => { const s = document.createElement("script"); s.src = "vendor/qrcode.js"; s.onload = () => ok(window.qrcode); s.onerror = () => { qrLoad = null; bad(new Error("QR didn't load")); }; document.head.appendChild(s); })); }
+async function showSyncCode() {
+  const code = S.sync.code, link = SITE_URL + "#/sync/" + normCode(code);
+  let svg = "";
+  try { const Q = await loadQR(); const q = Q(0, "M"); q.addData(link); q.make(); svg = q.createSvgTag({ cellSize: 5, margin: 3, scalable: true }); } catch (e) {}
+  modal(`<h3>Your sync code</h3>
+    <p class="muted" style="margin-top:0">Use it on your other devices. Anyone with this code can see and change your cookbook data, so only share it with devices you trust.</p>
+    <div style="font:700 clamp(15px,5.2vw,26px) ui-monospace,Menlo,Consolas,monospace;letter-spacing:.04em;text-align:center;margin:10px 0;white-space:nowrap;user-select:all">${esc(code)}</div>
+    ${svg ? `<div class="qrbox">${svg}</div><p class="muted" style="font-size:12.5px;text-align:center">Scan with the other device's camera (iPad, PC, Android). On an iPhone Home Screen app, type or paste the code instead.</p>` : ""}
+    <div class="row" style="justify-content:center"><button class="btn" id="scCopy">Copy code</button>${navigator.share ? `<button class="btn" id="scShare">${ICON.share} Send to my other device</button>` : ""}<button class="btn primary" data-close>Done</button></div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:0">Tip: save this code in your password manager. It's the only way to unlock your synced data.</p>`, m => {
+    $("#scCopy", m).onclick = async () => { try { await navigator.clipboard.writeText(code); toast("Code copied"); } catch (e) { toast(code); } };
+    if ($("#scShare", m)) $("#scShare", m).onclick = () => navigator.share({ title: "Cookbook sync code", text: `My cookbook sync code: ${code}\n${link}` }).catch(() => {});
+  });
+}
+function joinDialog(prefill) {
+  modal(`<h3>Join sync</h3>
+    <p class="muted" style="margin-top:0">Enter the sync code shown on your other device (Settings → Sync → Show my sync code). This device's favorites, notes and lists are combined with the synced ones.</p>
+    <input class="inp" id="jCode" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" style="font:600 18px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.05em" value="${esc(prefill ? fmtCode(prefill) : "")}">
+    <div class="row"><button class="btn" data-close>Cancel</button><button class="btn primary" id="jGo">Join</button></div>`, (m, close) => {
+    const go = async () => {
+      const c = $("#jCode", m).value;
+      if (!validCode(c)) { toast("That code doesn't look right: it's 20 letters and numbers"); return; }
+      close(); await syncStart(c, true);
+      toast(S.sync.err ? "Couldn't reach the sync server: " + S.sync.err : "Joined! This device now syncs.");
+      if (location.hash.startsWith("#/settings")) viewSettings();
+    };
+    $("#jGo", m).onclick = go; $("#jCode", m).onkeydown = e => { if (e.key === "Enter") go(); };
+  });
+}
+function syncBoxHTML() {
+  if (!PUSH) return `<p class="muted" style="margin:0">Sync uses your timer-alert server. Run <b>setup-push.ps1</b> once to turn it on.</p>`;
+  if (!SYNC_ON()) return `<p style="margin-top:0">Keep favorites, lists, notes, ratings, meal plans and the shopping list the same on your phone, iPad and computer. Encrypted on this device before it's sent.</p>
+    ${S.sync && S.sync.code ? `<p class="muted" style="font-size:13px">Sync is paused on this device.</p>` : ""}
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="sNew">Turn on sync (first device)</button><button class="btn" id="sJoin">Join with a code</button></div>`;
+  return `<p style="margin-top:0" id="syncStatus">${syncStatusText()}</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="sNow">Sync now</button><button class="btn" id="sShow">Show my sync code</button><button class="btn" id="sChange">Change sync code</button><button class="btn" id="sOff">Turn off on this device</button></div>
+    <p class="muted" style="font-size:12.5px;margin-bottom:0">Timers, alerts and dark mode stay per device.</p>`;
+}
+function bindSyncBox() {
+  if ($("#sNew")) $("#sNew").onclick = async () => { await syncStart(newCode(), false); viewSettings(); if (!S.sync.err) showSyncCode(); };
+  if ($("#sJoin")) $("#sJoin").onclick = () => joinDialog("");
+  if ($("#sNow")) $("#sNow").onclick = () => syncNow(true);
+  if ($("#sShow")) $("#sShow").onclick = showSyncCode;
+  if ($("#sOff")) $("#sOff").onclick = () => { if (confirm("Stop syncing on this device? Your data stays here; other devices keep syncing.")) { S.sync.on = false; clearInterval(syncPoll); save(); viewSettings(); } };
+  if ($("#sChange")) $("#sChange").onclick = async () => {
+    if (!confirm("Make a new sync code? The old code stops working. Your other devices will need the new code.")) return;
+    try { const K = await syncKeys(); await fetch(PUSH + "/sync/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: K.id }) }); } catch (e) {}
+    await syncStart(newCode(), false); viewSettings(); showSyncCode();
+  };
+}
+
 /* ---------- settings ---------- */
 let installEvt = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; });
@@ -1120,6 +1327,7 @@ function viewSettings() {
     <div class="box"><h3>Install on your phone</h3>
       ${standalone ? `<p>✓ Running as an installed app.</p>` : ios ? `<p>On iPhone or iPad: open this site in <b>Safari</b>, tap the <b>Share</b> button, then <b>Add to Home Screen</b>.</p>` : `<p>Add the cookbook to your home screen. It opens full screen and works with no internet.</p><button class="btn primary" id="install" ${installEvt ? "" : "disabled"}>Install app</button>${installEvt ? "" : `<p class="muted" style="font-size:13px">If the button is grayed out, use your browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.</p>`}`}
       <p class="muted" style="font-size:13px" id="offline">${navigator.serviceWorker && navigator.serviceWorker.controller ? "✓ Saved for offline use." : "Offline copy will be ready after this first visit finishes loading."}</p></div>
+    <div class="box"><h3>Sync between devices</h3>${syncBoxHTML()}</div>
     <div class="box"><h3>App version</h3>
       <p style="margin:0 0 10px">Version <b id="appVer">…</b></p>
       <button class="btn" id="updCheck">Check for updates</button></div>
@@ -1139,6 +1347,7 @@ function viewSettings() {
   </div>`;
   swVersion(navigator.serviceWorker && navigator.serviceWorker.controller).then(v => { const el = $("#appVer"); if (el) el.textContent = v || "(older version: tap Check for updates)"; });
   $("#updCheck").onclick = () => checkForUpdate(true);
+  bindSyncBox();
   if ($("#pOn")) $("#pOn").onclick = async () => { await enablePush(); viewSettings(); };
   if ($("#pOff")) $("#pOff").onclick = async () => { await disablePush(); viewSettings(); };
   if ($("#pTest")) $("#pTest").onclick = pushTest;
@@ -1146,8 +1355,8 @@ function viewSettings() {
   $$("[data-th]").forEach(b => b.onclick = () => { S.theme = b.dataset.th || null; applyTheme(); save(); viewSettings(); });
   if ($("#install")) $("#install").onclick = async () => { if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewSettings(); } };
   $("#bExp").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: "application/json" })); a.download = `carnivore-cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
-  $("#bImp").onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== "object" || !d.fav) throw 0; S = Object.assign(DEF(), d); timersFromState(); save(); applyTheme(); toast("Backup restored"); viewSettings(); } catch (x) { toast("That file isn't a cookbook backup"); } };
-  $("#bReset").onclick = () => { if (confirm("Erase favorites, notes, ratings, plans and lists on this device?")) { S = DEF(); save(); applyTheme(); timersFromState(); viewSettings(); } };
+  $("#bImp").onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== "object" || !d.fav) throw 0; S = Object.assign(DEF(), d); timersFromState(); syncKeyCache = null; startSyncLoop(); save(); applyTheme(); toast("Backup restored"); viewSettings(); } catch (x) { toast("That file isn't a cookbook backup"); } };
+  $("#bReset").onclick = () => { if (confirm("Erase favorites, notes, ratings, plans and lists on this device?")) { clearInterval(syncPoll); S = DEF(); save(); applyTheme(); timersFromState(); viewSettings(); } };
 }
 function searchHelp() {
   return `<p style="margin-top:0">Search looks through every title, ingredient, step and tip.</p>
@@ -1179,6 +1388,7 @@ function route() {
   else if (h.startsWith("#/list")) viewList();
   else if (h.startsWith("#/pantry")) viewPantry();
   else if (h.startsWith("#/settings")) viewSettings();
+  else if ((m = h.match(/^#\/sync\/([A-Za-z0-9-]+)/))) { const c = m[1]; history.replaceState(null, "", "#/settings"); viewSettings(); if (SYNC_ON() && normCode(S.sync.code) === normCode(c)) toast("This device already syncs with that code"); else joinDialog(c); }
   else {
     const q = (h.match(/[?&]q=([^&]*)/) || [])[1];
     if (q != null) { Q = decodeURIComponent(q); $("#q").value = Q; $("#searchWrap").classList.toggle("has", !!Q); }
@@ -1261,5 +1471,5 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   }).catch(() => {});
 }
 
-applyTheme(); counts(); timersFromState(); route();
+applyTheme(); counts(); timersFromState(); route(); startSyncLoop();
 })();

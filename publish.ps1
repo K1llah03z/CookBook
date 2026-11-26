@@ -45,10 +45,17 @@ if (-not $branch -or $branch -eq "HEAD") { $branch = "main" }
 # ---- bump the service-worker version so phones update
 $swPath = Join-Path $PSScriptRoot "docs\sw.js"
 $sw = [IO.File]::ReadAllText($swPath)
-$ver = "ekc-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+# Version = year.month.DDNN  (day of the month + that day's build number, e.g. 2026.11.2601, 2026.11.2602)
+$now = Get-Date
+$prefix = "{0}.{1}.{2}" -f $now.Year, $now.Month, $now.Day
+$cur = [regex]::Match($sw, 'const VERSION = "([^"]*)";').Groups[1].Value
+$n = 1
+$m = [regex]::Match($cur, '^' + [regex]::Escape($prefix) + '(\d{2})$')
+if ($m.Success) { $n = [int]$m.Groups[1].Value + 1 }
+$ver = $prefix + $n.ToString("00")
 $sw = [regex]::Replace($sw, 'const VERSION = "[^"]*";', "const VERSION = `"$ver`";")
 [IO.File]::WriteAllText($swPath, $sw, $utf8)
-Say "App version $ver"
+Say "App version $ver  (was $cur)"
 
 # ---- optional: redeploy the alert server
 if ($Server) {

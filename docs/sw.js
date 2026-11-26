@@ -1,11 +1,11 @@
 /* Easy Keto Carnivore Cookbook — service worker: offline copy + updates.
    VERSION is year.month.DDNN: day of the month + that day's build number (example: 2026.12.501 = Dec 5, build 1).
    publish.ps1 sets it for you. Any change to this file tells phones an update is available. */
-const VERSION = "2026.11.2601";
+const VERSION = "2026.11.2603";
 const CACHE = "ekc-" + VERSION;
 const CORE = ["./", "index.html", "styles.css", "app.js", "recipes.js", "config.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png",
-  "icons/apple-touch-icon.png", "icons/favicon-32.png", "vendor/jspdf.umd.min.js"];
+  "icons/apple-touch-icon.png", "icons/favicon-32.png", "vendor/jspdf.umd.min.js", "vendor/qrcode.js"];
 
 // Download the new version's files fresh (skip the browser's own cache), then wait.
 // The app shows "Update now"; the switch happens when you tap it or next time the app starts.

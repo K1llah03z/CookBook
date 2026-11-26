@@ -13,9 +13,17 @@
  *   POST /test     { sub }                   send a test alert in ~2 seconds
  *
  * Stored per phone: the push subscription and pending timers only. Timers are deleted once sent.
+ *
+ * Device sync (SyncStore, one Durable Object per sync code):
+ *   POST /sync        { id, dev, since, items:[{k,t,ct}] } -> { rev, items:[{k,t,ct}] }  push changes + get newer ones
+ *   POST /sync/delete { id }                                  -> forget this sync space (used when the code changes)
+ *   id = SHA-256 of the sync code (the code itself never reaches the server).
+ *   k  = opaque item name, ct = AES-GCM ciphertext made on the device. The server can't read either.
+ *   Newest change (t) wins per item.
  */
 
 const MAX_TIMERS = 25;
+const SYNC_MAX_ITEMS = 20000, SYNC_MAX_CT = 100000, SYNC_MAX_BATCH = 400;
 const MAX_AHEAD_MS = 48 * 3600 * 1000;
 
 export default {
@@ -37,10 +45,17 @@ export default {
     if (url.pathname === "/" || url.pathname === "/health") return json({ ok: true, service: "carnivore-timer-push" });
     if (url.pathname === "/vapid" && req.method === "GET") return json({ publicKey: env.VAPID_PUBLIC_KEY || "" });
     if (!allowed) return json({ error: "origin not allowed" }, 403);
-    if (req.method !== "POST" || !["/schedule", "/cancel", "/test"].includes(url.pathname)) return json({ error: "not found" }, 404);
+    if (req.method !== "POST" || !["/schedule", "/cancel", "/test", "/sync", "/sync/delete"].includes(url.pathname)) return json({ error: "not found" }, 404);
 
     let body;
     try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
+
+    if (url.pathname.startsWith("/sync")) {
+      if (!body || !/^[0-9a-f]{64}$/.test(String(body.id || ""))) return json({ error: "bad sync id" }, 400);
+      const stub = env.SYNC.get(env.SYNC.idFromName(body.id));
+      const res = await stub.fetch("https://do" + url.pathname, { method: "POST", body: JSON.stringify(body) });
+      return new Response(res.body, { status: res.status, headers: { "Content-Type": "application/json", ...cors } });
+    }
     const sub = body && body.sub;
     if (!validSub(sub)) return json({ error: "bad subscription" }, 400);
 
@@ -103,6 +118,49 @@ export class TimerStore {
   }
 
   reply(obj, status = 200) { return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } }); }
+}
+
+export class SyncStore {
+  constructor(ctx, env) { this.ctx = ctx; }
+  reply(obj, status = 200) { return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } }); }
+
+  async fetch(req) {
+    const path = new URL(req.url).pathname;
+    const b = await req.json();
+    const st = this.ctx.storage;
+    if (path === "/sync/delete") { await st.deleteAll(); await st.put("deleted", true); return this.reply({ ok: true }); }
+    if (await st.get("deleted")) return this.reply({ gone: true }, 410);
+
+    let rev = (await st.get("rev")) || 0;
+    let count = (await st.get("count")) || 0;
+    const dev = String(b.dev || "").slice(0, 40);
+    const items = (Array.isArray(b.items) ? b.items : []).slice(0, SYNC_MAX_BATCH)
+      .filter(i => i && /^[A-Za-z0-9_-]{8,64}$/.test(String(i.k)) && Number.isFinite(i.t) && typeof i.ct === "string" && i.ct.length <= SYNC_MAX_CT);
+    if (items.length) {
+      const existing = new Map();
+      for (let i = 0; i < items.length; i += 128) {
+        const got = await st.get(items.slice(i, i + 128).map(x => "i:" + x.k));
+        for (const [k, v] of got) existing.set(k, v);
+      }
+      const puts = {};
+      for (const it of items) {
+        const key = "i:" + it.k, cur = puts[key] || existing.get(key);
+        if (cur && cur.t > it.t) continue;                       // a newer change is already stored
+        if (!cur) { if (count >= SYNC_MAX_ITEMS) return this.reply({ error: "sync space is full" }, 413); count++; }
+        puts[key] = { t: it.t, ct: it.ct, rev: ++rev, by: dev };
+      }
+      const entries = Object.entries(puts);
+      for (let i = 0; i < entries.length; i += 120) await st.put(Object.fromEntries(entries.slice(i, i + 120)));
+      await st.put({ rev, count });
+    }
+    // Everything changed since the caller last synced (the device ignores its own echoes).
+    const since = Number(b.since) || 0, out = [];
+    if (since < rev) {
+      const all = await st.list({ prefix: "i:" });
+      for (const [k, v] of all) if (v.rev > since) out.push({ k: k.slice(2), t: v.t, ct: v.ct });
+    }
+    return this.reply({ rev, items: out, count });
+  }
 }
 
 /* ---------------- helpers ---------------- */

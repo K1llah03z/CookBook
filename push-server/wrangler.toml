@@ -14,7 +14,16 @@ VAPID_SUBJECT = "https://k1llah03z.github.io/CookBook/"
 name = "TIMERS"
 class_name = "TimerStore"
 
+[[durable_objects.bindings]]
+name = "SYNC"
+class_name = "SyncStore"
+
 # Free plan needs SQLite-backed Durable Objects.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TimerStore"]
+
+# Device sync (added 2026.11)
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SyncStore"]
