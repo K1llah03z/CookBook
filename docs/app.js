@@ -1422,6 +1422,7 @@ function viewSettings() {
     </div>
     <div class="box"><h3>Daily goals (used by the meal planner)</h3>
       <div class="goals">${[["kcal", "Calories"], ["p", "Protein (g)"], ["f", "Fat (g)"], ["c", "Net carbs (g)"]].map(([k, l]) => `<label>${l}<input class="inp" type="number" min="0" data-goal="${k}" value="${g[k]}"></label>`).join("")}</div></div>
+    <div class="box"><a class="sister" href="https://k1llah03z.github.io/FitTrack/" target="_blank" rel="noopener"><span class="ic">💪</span><span><b>FitTrack</b><br><span class="muted" style="font-size:13px">Track meals, fasting, workouts and Apple Watch data. Every recipe here shows up in its food search with nutrition, and the same Apple passkey syncs both apps.</span></span></a></div>
     <div class="box"><h3>Appearance</h3><div class="chips">${[["", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<button class="chip ${(S.theme || "") === v ? "on" : ""}" data-th="${v}">${t}</button>`).join("")}</div></div>
     <div class="box"><h3>Backup</h3>
       <p class="muted" style="margin-top:0">Favorites, notes, ratings, plans and lists are stored in this browser only. Save a backup file to move them to another device.</p>

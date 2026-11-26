@@ -292,3 +292,5 @@ footer.foot{max-width:1280px;margin:0 auto;padding:20px 16px 40px;color:var(--mu
 .ioskey span{color:var(--ink)}
 .iossteps{padding-left:20px;line-height:1.9;margin:6px 0 10px}
 .iossteps li{margin-bottom:4px}
+.sister{display:flex;gap:12px;align-items:center;text-decoration:none;color:inherit}
+.sister .ic{width:46px;height:46px;border-radius:12px;flex:none;display:grid;place-items:center;font-size:24px;background:#10241c;color:#fff}
