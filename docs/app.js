@@ -19,7 +19,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 /* ---------- saved state (this device only) ---------- */
 const KEY = "ekc:v1";
 const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, eat: {}, mine: {}, recent: [], plan: {}, list: [], pantry: [],
-  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null, doneness: {} });
+  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null, doneness: {}, diet: "carn" });
 let S;
 try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
 let saveT;
@@ -41,6 +41,50 @@ function indexRecipe(r) {
     r.b ? "budget cheap" : "", r.tot <= 20 ? "quick fast easy 20 minutes" : "", r.k === 0 ? "no cook" : "", r.mine ? "my own recipe mine" : ""].join(" "));
 }
 R.forEach(indexRecipe);
+/* ---------- Keto / Carnivore ----------
+   Book recipes are carnivore. r.kt holds the keto version: either hand-written (h:1, full g/d)
+   or automatic changes (r: replaced lines, a: added ingredients, s: [position, step] inserts). */
+const isKeto = () => !!(S && S.diet === "keto");
+function applyDiet() {
+  const keto = isKeto();
+  for (const r of R) {
+    if (!r.kt) continue;
+    if (!r._c) r._c = { g: r.g, d: r.d, x: r.x, n: r.n, p: r.p, k: r.k };
+    const c = r._c, kt = r.kt;
+    r._ka = null; r._ks = null; r._hand = false;
+    if (!keto) Object.assign(r, { g: c.g, d: c.d, x: c.x, n: c.n, p: c.p, k: c.k });
+    else if (kt.h) { Object.assign(r, { g: kt.g, d: kt.d, x: kt.x || c.x, n: kt.n, p: kt.p ?? c.p, k: kt.k ?? c.k }); r._hand = true; }
+    else {
+      const g = c.g.map((l, i) => (kt.r && kt.r[i]) || l), ka = new Set();
+      (kt.a || []).forEach(l => { ka.add(g.length); g.push(l); });
+      const d = c.d.slice();
+      (kt.s || []).map((x, j) => [x[0], x[1], j]).sort((a, b) => b[0] - a[0] || b[2] - a[2]).forEach(([pos, text]) => d.splice(pos, 0, text));
+      Object.assign(r, { g, d, x: c.x, n: kt.n, p: c.p + (kt.p || 0), k: c.k });
+      r._ka = ka; r._ks = new Set((kt.s || []).map(x => x[1]));
+    }
+    indexRecipe(r);
+  }
+}
+function ketoSummary(r) {
+  if (!r.kt) return "Same recipe for keto and carnivore.";
+  if (r.kt.h) return isKeto() ? "Keto version of this recipe." : "Switch to Keto for the keto version.";
+  const names = (r.kt.a || []).map(l => l.replace(/^[\d./ ]+(cups?|tbsp|tsp|lb|oz)?\s*/i, "").replace(/^(small head|small|medium|ripe|fresh|baby)\s+/i, "").split(",")[0].replace(/^(cloves?|sprigs?) /, "")).filter((x, i, a) => !/^(butter|olive oil|mayonnaise|apple cider vinegar|lemon juice)$/i.test(x) && a.indexOf(x) === i);
+  const opt = Object.keys(r.kt.r || {}).length;
+  const parts = names.slice(0, 4).join(", ") + (names.length > 4 ? ", and more" : "");
+  if (!isKeto()) return names.length ? "Keto adds " + parts + "." : opt ? "Keto includes the optional items." : "";
+  return names.length ? "Showing keto: adds " + parts + "." : "Showing keto: optional items included.";
+}
+function dietSwitch(where) {
+  return `<div class="diet-sw no-print" role="radiogroup" aria-label="Recipe style"><button class="seg ${!isKeto() ? "on" : ""}" role="radio" aria-checked="${!isKeto()}" data-diet="carn">🥩 Carnivore</button><button class="seg ${isKeto() ? "on" : ""}" role="radio" aria-checked="${isKeto()}" data-diet="keto">🥑 Keto</button></div>`;
+}
+function bindDiet(after) {
+  $$("[data-diet]").forEach(b => b.onclick = () => {
+    const v = b.dataset.diet === "keto" ? "keto" : "carn";
+    if ((S.diet || "carn") === v) return;
+    S.diet = v; save(); applyDiet(); after();
+    toast(v === "keto" ? "Showing keto versions: extra vegetables, aromatics, and sides" : "Showing strict carnivore recipes");
+  });
+}
 // Your own recipes live in S.mine (synced) and are merged into the same list as the book's recipes.
 function loadMine() {
   for (let i = R.length - 1; i >= 0; i--) if (R[i].mine) { byId.delete(R[i].i); R.splice(i, 1); }
@@ -245,7 +289,7 @@ function viewBrowse(opts = {}) {
   const { list, pq } = results();
   const showHero = !Q && !fActive() && !opts.fav;
   app.innerHTML = `
-  ${showHero ? `<div class="hero">${M.cats.map((c, i) => `<a href="#/" data-cat="${i}" style="background:${M.colors[i]}"><b>${esc(c)}</b><span>${R.filter(r => r.c === i).length} recipes</span></a>`).join("")}</div><a class="guide-link" href="#/guide">🌡️ <span><b>Before you start</b> · safe cooking temperatures, pantry staples, and tips</span><span aria-hidden="true">›</span></a>` : ""}
+  ${showHero ? `<div class="hero">${M.cats.map((c, i) => `<a href="#/" data-cat="${i}" style="background:${M.colors[i]}"><b>${esc(c)}</b><span>${R.filter(r => r.c === i).length} recipes</span></a>`).join("")}</div><div class="diet-home"><span><b>Recipe style</b><br><span class="muted">Keto adds vegetables, aromatics, and sides</span></span>${dietSwitch()}</div><a class="guide-link" href="#/guide">🌡️ <span><b>Before you start</b> · safe cooking temperatures, pantry staples, and tips</span><span aria-hidden="true">›</span></a>` : ""}
   <div class="browse">
     <aside class="filters" id="filters" aria-label="Filters">${filtersHTML()}</aside>
     <section>
@@ -316,6 +360,7 @@ function activeChips() {
 function bindFilters(opts) {
   const fl = $("#filters"), rerender = () => { saveF(); viewBrowse(opts); };
   $$(".hero [data-cat]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); F.cats = new Set([+a.dataset.cat]); rerender(); }));
+  bindDiet(() => viewBrowse(opts));
   $$("[data-c]", fl).forEach(b => b.onclick = () => { const i = +b.dataset.c; F.cats.has(i) ? F.cats.delete(i) : F.cats.add(i); rerender(); });
   $$("[data-t]", fl).forEach(b => b.onclick = () => { F.time = +b.dataset.t; rerender(); });
   $$("[data-m]", fl).forEach(b => b.onclick = () => { const i = +b.dataset.m; F.meth.has(i) ? F.meth.delete(i) : F.meth.add(i); rerender(); });
@@ -572,8 +617,9 @@ function viewRecipe(id) {
       <div class="fact"><small>Total</small><b>${fmtT(r.tot)}</b></div>
       <div class="fact"><small>Serves</small><b>${serv}</b></div>
     </div>
+    ${r.mine ? "" : `<div class="diet-row">${dietSwitch()}<span class="muted">${esc(ketoSummary(r0))}</span></div>`}
     <div class="nut">
-      <div class="lbl">Nutrition per serving<br><span style="font-weight:600;text-transform:none;letter-spacing:0">estimated${r.u ? ", " + esc(r.u) : ""}</span></div>
+      <div class="lbl">Nutrition per serving<br><span style="font-weight:600;text-transform:none;letter-spacing:0">estimated${r.kt && isKeto() ? ", keto version" : ""}${r.u ? ", " + esc(r.u) : ""}</span></div>
       <div class="v"><b>${fmtK(r.n[0])}</b><span>Calories</span></div>
       <div class="v"><b>${r.n[1]} g</b><span>Protein</span></div>
       <div class="v"><b>${r.n[2]} g</b><span>Fat</span></div>
@@ -602,14 +648,14 @@ function viewRecipe(id) {
       <div class="box">
         <h3 style="color:${c}">Ingredients</h3>
         <div class="scaler">Servings <button id="sMinus" aria-label="Fewer servings">−</button><b id="sNum">${serv}</b><button id="sPlus" aria-label="More servings">+</button>${k !== 1 ? `<button class="btn sm" id="sReset" style="border-radius:8px;width:auto;height:auto">Reset</button>` : ""}</div>
-        <ul class="ings">${r.g.map((g, i) => { const s = scaleLine(g, k); return `<li><input type="checkbox" id="g${i}" aria-label="Got it"><span>${s.q ? `<span class="q">${esc(s.q)}</span> ` : ""}${esc(s.rest)}</span></li>`; }).join("")}</ul>
+        <ul class="ings">${r.g.map((g, i) => { const s = scaleLine(g, k); return `<li><input type="checkbox" id="g${i}" aria-label="Got it"><span>${s.q ? `<span class="q">${esc(s.q)}</span> ` : ""}${esc(s.rest)}${r._ka && r._ka.has(i) ? ' <span class="kbadge">keto</span>' : ""}</span></li>`; }).join("")}</ul>
         ${(() => { const st = safeTemps(r); return st.length ? `<div class="safe"><b>🌡️ Safe temp</b>${st.map(x => `<span>${esc(x)}</span>`).join("")}<a href="#/guide">All temperatures ›</a></div>` : ""; })()}
         ${k !== 1 ? `<p class="muted" style="font-size:12.5px;margin:8px 0 0">Amounts scaled ×${(+k.toFixed(2))}. Cook times stay about the same; larger roasts may need longer.</p>` : ""}
       </div>
       <div>
         <div class="box">
           <h3 style="color:${c}">Directions</h3>
-          <ol class="steps">${r.d.map(s => `<li><div>${stepHTML(s, r.t)}</div></li>`).join("")}</ol>
+          <ol class="steps">${r.d.map((s, i) => `<li><div>${stepHTML(s, r.t)}${r._ks && r._ks.has(s) ? ' <span class="kbadge">keto</span>' : ""}</div></li>`).join("")}</ol>
           ${r.x ? `<div class="tip"><b>TIP</b> ${esc(r.x)}</div>` : ""}
         </div>
         <div class="box notes" style="margin-top:14px">
@@ -641,6 +687,7 @@ function viewRecipe(id) {
   $("#madeBtn").onclick = () => logMade(id);
   $("#timerBtn2").onclick = () => timerDialog(r.t);
   $("#cookBtn").onclick = () => cookMode(r, k);
+  bindDiet(() => viewRecipe(id));
   $$("[data-done]").forEach(b => b.onclick = () => { S.doneness = S.doneness || {}; S.doneness[dKind] = b.dataset.done; delete curDone[id]; save(); viewRecipe(id); toast("Doneness set to " + DONENESS[dKind].levels.find(l => l[0] === b.dataset.done)[1] + " for " + DONENESS[dKind].label.toLowerCase()); });
   $("#planBtn").onclick = () => addToPlanDialog(id);
   $("#listBtn").onclick = () => { addToList([[r, k]]); toast(`Added ${r.g.length} ingredients to your shopping list`); };
@@ -1343,7 +1390,7 @@ function flattenState() {
     for (const k in obj) f[pre + ":" + k] = obj[k];
   for (const d in S.plan) for (const sl in S.plan[d]) if ((S.plan[d][sl] || []).length) f["plan:" + d + ":" + sl] = S.plan[d][sl];
   for (const it of S.list) f["list:" + it.key] = it;
-  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent; f.doneness = S.doneness || {};
+  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent; f.doneness = S.doneness || {}; f.diet = S.diet || "carn";
   return f;
 }
 function applyFlat(f) {
@@ -1359,7 +1406,9 @@ function applyFlat(f) {
   list.sort((x, y) => (order.has(x.key) ? order.get(x.key) : 1e9) - (order.has(y.key) ? order.get(y.key) : 1e9));
   Object.assign(S, { fav, status, notes, rating, made, eat, mine, plan, list });
   loadMine();
-  for (const k of ["pantry", "pantryFats", "goals", "people", "recent", "doneness"]) if (k in f) S[k] = f[k];
+  const dietWas = S.diet;
+  for (const k of ["pantry", "pantryFats", "goals", "people", "recent", "doneness", "diet"]) if (k in f) S[k] = f[k];
+  if (S.diet !== dietWas) applyDiet();
 }
 let syncBusy = false, syncAgain = false, syncT = null, syncPoll = null;
 window.__syncSoon = () => { if (!SYNC_ON() || syncApplying) return; clearTimeout(syncT); syncT = setTimeout(() => syncNow(), 1500); };
@@ -1654,6 +1703,7 @@ function viewSettings() {
     </div>
     <div class="box"><h3>Daily goals (used by the meal planner)</h3>
       <div class="goals">${[["kcal", "Calories"], ["p", "Protein (g)"], ["f", "Fat (g)"], ["c", "Net carbs (g)"]].map(([k, l]) => `<label>${l}<input class="inp" type="number" min="0" data-goal="${k}" value="${g[k]}"></label>`).join("")}</div></div>
+    <div class="box"><h3>Recipe style</h3><p style="margin-top:0">Carnivore shows the book's recipes exactly as written. Keto adds onion, garlic, herbs, vegetable sides, and berries on desserts, and includes the optional plant items. Nutrition, shopping lists, and the meal planner follow your choice.</p>${dietSwitch()}</div>
     <div class="box"><a class="sister" href="#/guide"><span class="ic">🌡️</span><span><b>Before you start</b><br><span class="muted" style="font-size:13px">Safe cooking temperatures, raw egg safety, pantry staples, and tips.</span></span></a></div>
     <div class="box"><a class="sister" href="https://k1llah03z.github.io/FitTrack/" target="_blank" rel="noopener"><span class="ic">💪</span><span><b>FitTrack</b><br><span class="muted" style="font-size:13px">Track meals, fasting, workouts and Apple Watch data. Every recipe here shows up in its food search with nutrition, and the same Apple passkey syncs both apps.</span></span></a></div>
     <div class="box"><h3>Appearance</h3><div class="chips">${[["", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<button class="chip ${(S.theme || "") === v ? "on" : ""}" data-th="${v}">${t}</button>`).join("")}</div></div>
@@ -1671,6 +1721,7 @@ function viewSettings() {
   if ($("#pTest")) $("#pTest").onclick = pushTest;
   $$("[data-goal]").forEach(i => i.onchange = () => { S.goals[i.dataset.goal] = Math.max(1, +i.value || 1); save(); toast("Goal saved"); });
   $$("[data-th]").forEach(b => b.onclick = () => { S.theme = b.dataset.th || null; applyTheme(); save(); viewSettings(); });
+  bindDiet(() => viewSettings());
   if ($("#install")) $("#install").onclick = async () => { if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewSettings(); } };
   $("#bExp").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: "application/json" })); a.download = `carnivore-cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
   $("#bImp").onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== "object" || !d.fav) throw 0; S = Object.assign(DEF(), d); loadMine(); timersFromState(); syncKeyCache = null; startSyncLoop(); save(); applyTheme(); toast("Backup restored"); viewSettings(); } catch (x) { toast("That file isn't a cookbook backup"); } };
@@ -1792,5 +1843,5 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   }).catch(() => {});
 }
 
-applyTheme(); loadMine(); counts(); timersFromState(); route(); startSyncLoop();
+applyTheme(); loadMine(); applyDiet(); counts(); timersFromState(); route(); startSyncLoop();
 })();
