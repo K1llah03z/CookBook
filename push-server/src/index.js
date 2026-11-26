@@ -158,7 +158,18 @@ export class SyncStore {
     if (path === "/inbox/put") {
       // lenient: Shortcuts may send "8,421", "7.5 hr" or "228.4 lb"
       const num = (v, max) => { const m = String(v ?? "").replace(/,(\d{3})(?!\d)/g, "$1").replace(",", ".").match(/\d+(\.\d+)?/); const n = m ? Number(m[0]) : NaN; return Number.isFinite(n) && n > 0 && n <= max ? Math.round(n * 100) / 100 : undefined; };
-      const e = { at: Date.now(), steps: num(b.steps, 200000), sleep: num(b.sleep, 24), weight: num(b.weight, 2000), water: num(b.water, 100),
+      // Sleep from Shortcuts can arrive as hours (7.4), minutes (444), seconds (26640), "7:24:00" or "7 hr 24 min".
+      const sleepHours = v => {
+        const s = String(v ?? "").trim().toLowerCase(); if (!s) return undefined;
+        let h;
+        const clock = s.match(/^(\d+):(\d{2})(?::(\d{2}))?$/);
+        const words = s.match(/(\d+(?:[.,]\d+)?)\s*(h|hr|hrs|hour|hours)\b/), mins = s.match(/(\d+(?:[.,]\d+)?)\s*(m|min|mins|minute|minutes)\b/);
+        if (clock) h = +clock[1] + +clock[2] / 60 + (+clock[3] || 0) / 3600;
+        else if (words || mins) h = (words ? +words[1].replace(",", ".") : 0) + (mins ? +mins[1].replace(",", ".") / 60 : 0);
+        else { const n = num(s, 200000); if (n === undefined) return undefined; h = n <= 24 ? n : n <= 1440 ? n / 60 : n / 3600; }
+        return h > 0 && h <= 24 ? Math.round(h * 100) / 100 : undefined;
+      };
+      const e = { at: Date.now(), steps: num(b.steps, 200000), sleep: sleepHours(b.sleep), weight: num(b.weight, 2000), water: num(b.water, 100),
         kcal: num(b.kcal, 15000), exmin: num(b.exmin, 1440), rhr: num(b.rhr, 250), hr: num(b.hr, 250) };
       for (const k of Object.keys(e)) if (e[k] === undefined) delete e[k];
       if (Object.keys(e).length < 2) return this.reply({ error: "nothing to save: send steps, sleep, weight, water, kcal, exmin, rhr or hr" }, 400);
