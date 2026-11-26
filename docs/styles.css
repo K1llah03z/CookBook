@@ -314,3 +314,4 @@ table.temps tr.sub td:first-child{padding-left:18px;color:var(--muted)}
 .done-opts .seg.on{background:var(--c,var(--accent))}
 .done-note{margin:10px 0 0;font-size:13.5px;line-height:1.45}
 @media print{.done-opts{display:none}}
+@media (max-width:600px){.hero a:last-child:nth-child(odd){grid-column:1/-1;min-height:64px}}
