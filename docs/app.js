@@ -18,7 +18,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 
 /* ---------- saved state (this device only) ---------- */
 const KEY = "ekc:v1";
-const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, recent: [], plan: {}, list: [], pantry: [],
+const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, eat: {}, recent: [], plan: {}, list: [], pantry: [],
   pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null });
 let S;
 try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
@@ -481,12 +481,19 @@ function viewRecipe(id) {
   $("#backBtn").onclick = e => { if (history.length > 1 && lastRoute && !lastRoute.startsWith("#/r/")) { e.preventDefault(); history.back(); } };
 }
 function logMade(id) {
-  (S.made[id] = S.made[id] || []).push(Date.now()); save();
+  const ts = Date.now();
+  (S.made[id] = S.made[id] || []).push(ts); S.eat = S.eat || {}; S.eat[ts] = 1; save();
   const onPage = () => location.hash === "#/r/" + id;
   if (onPage()) viewRecipe(id);
-  if (S.status[id] === "liked" || S.status[id] === "dis") { toast("Nice! Logged it."); return; }
-  modal(`<h3>How was ${esc(byId.get(id).t)}?</h3><p class="muted" style="margin-top:0">Logged as cooked. Want to file it in your lists?</p>
-    <div class="row" style="justify-content:flex-start"><button class="btn" data-how="liked">👍 Liked it</button><button class="btn" data-how="dis">👎 Didn't like it</button><button class="btn" data-close>Skip</button></div>`, (m, close) => {
+  const rated = S.status[id] === "liked" || S.status[id] === "dis";
+  // servings eaten: FitTrack logs this many servings (1 if you skip)
+  modal(`<h3>Made ${esc(byId.get(id).t)} 🍳</h3>
+    <p class="muted" style="margin:0 0 6px">How much did you eat? FitTrack logs it for you.</p>
+    <div class="chips" id="eatChips">${[[0.5, "½"], [1, "1"], [1.5, "1½"], [2, "2"], [3, "3"], [0, "None"]].map(([v, t]) => `<button class="chip ${v === 1 ? "on" : ""}" data-eat="${v}">${t}${v ? ` serving${v > 1 ? "s" : ""}` : ""}</button>`).join("")}</div>
+    ${rated ? "" : `<p class="muted" style="margin:12px 0 6px">How was it?</p>
+    <div class="row" style="justify-content:flex-start;margin-top:0"><button class="btn" data-how="liked">👍 Liked it</button><button class="btn" data-how="dis">👎 Didn't like it</button></div>`}
+    <div class="row"><button class="btn primary" data-close>Done</button></div>`, (m, close) => {
+    $$("[data-eat]", m).forEach(b => b.onclick = () => { S.eat[ts] = +b.dataset.eat; save(); $$("[data-eat]", m).forEach(x => x.classList.toggle("on", x === b)); });
     $$("[data-how]", m).forEach(b => b.onclick = () => { S.status[id] = b.dataset.how; save(); close(); toast("Saved to your lists"); if (onPage()) viewRecipe(id); });
   });
 }
@@ -1159,7 +1166,7 @@ const fnv = str => { let h = 2166136261; for (let i = 0; i < str.length; i++) { 
 // What syncs: everything except device-only things (timers, alert setting, theme, the sync settings).
 function flattenState() {
   const f = {};
-  for (const [pre, obj] of [["fav", S.fav], ["status", S.status], ["notes", S.notes], ["rating", S.rating], ["made", S.made]])
+  for (const [pre, obj] of [["fav", S.fav], ["status", S.status], ["notes", S.notes], ["rating", S.rating], ["made", S.made], ["eat", S.eat || {}]])
     for (const k in obj) f[pre + ":" + k] = obj[k];
   for (const d in S.plan) for (const sl in S.plan[d]) if ((S.plan[d][sl] || []).length) f["plan:" + d + ":" + sl] = S.plan[d][sl];
   for (const it of S.list) f["list:" + it.key] = it;
@@ -1167,8 +1174,8 @@ function flattenState() {
   return f;
 }
 function applyFlat(f) {
-  const fav = {}, status = {}, notes = {}, rating = {}, made = {}, plan = {}, list = [];
-  const maps = { fav, status, notes, rating, made };
+  const fav = {}, status = {}, notes = {}, rating = {}, made = {}, eat = {}, plan = {}, list = [];
+  const maps = { fav, status, notes, rating, made, eat };
   for (const [n, v] of Object.entries(f)) {
     const [pre, a, b] = n.split(":");
     if (maps[pre] && a !== undefined) maps[pre][n.slice(pre.length + 1)] = v;
@@ -1177,7 +1184,7 @@ function applyFlat(f) {
   }
   const order = new Map(S.list.map((x, i) => [x.key, i]));
   list.sort((x, y) => (order.has(x.key) ? order.get(x.key) : 1e9) - (order.has(y.key) ? order.get(y.key) : 1e9));
-  Object.assign(S, { fav, status, notes, rating, made, plan, list });
+  Object.assign(S, { fav, status, notes, rating, made, eat, plan, list });
   for (const k of ["pantry", "pantryFats", "goals", "people", "recent"]) if (k in f) S[k] = f[k];
 }
 let syncBusy = false, syncAgain = false, syncT = null, syncPoll = null;
