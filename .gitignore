@@ -1,0 +1,6 @@
+push-server/node_modules/
+push-server/.wrangler/
+push-server/.vapid-keys.json
+push-server/.dev.vars
+.DS_Store
+Thumbs.db

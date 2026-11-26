@@ -519,6 +519,68 @@ function cookMode(r, k) {
   draw();
 }
 
+/* ---------- lock-screen timer alerts via the push server (optional) ---------- */
+const PUSH = String((window.EKC_PUSH || {}).server || "").replace(/\/+$/, "");
+const pushSupported = () => !!(PUSH && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window);
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+let pushWarned = false;
+const b64uToBytes = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+async function pushSub() {
+  if (!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function enablePush() {
+  if (!PUSH) { toast("Timer alert server isn't set up yet (see README)"); return false; }
+  if (isIOS && !isStandalone()) { modal(`<h3>Add to Home Screen first</h3><p>On iPhone, lock-screen alerts work once the cookbook is on your Home Screen:</p><ol><li>In Safari tap <b>Share</b> → <b>Add to Home Screen</b>.</li><li>Open the cookbook from that new icon.</li><li>Tap <b>⏱ → Turn on lock-screen alerts</b> again.</li></ol><div class="row"><button class="btn primary" data-close>OK</button></div>`); return false; }
+  if (!pushSupported()) { toast("This browser can't receive lock-screen alerts"); return false; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Alerts are blocked. Allow notifications for this app in your phone settings."); return false; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await (await fetch(PUSH + "/vapid")).json();
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(publicKey) });
+    }
+    S.pushOn = true; save();
+    for (const t of T) if (!t.done && !t.paused) pushSync("schedule", t);
+    toast("Lock-screen alerts are on");
+    return true;
+  } catch (e) { console.warn(e); toast("Couldn't turn on alerts: " + (e.message || e)); return false; }
+}
+async function disablePush() {
+  try { const sub = await pushSub(); if (sub) { for (const t of T) pushSync("cancel", t, sub); await sub.unsubscribe(); } } catch (e) {}
+  S.pushOn = false; save(); toast("Lock-screen alerts are off");
+}
+async function pushSync(op, t, subIn) {
+  if (!S.pushOn || !PUSH) return;
+  try {
+    const sub = subIn || await pushSub();
+    if (!sub) { S.pushOn = false; save(); return; }
+    const body = { sub: sub.toJSON(), id: String(t.id) };
+    if (op === "schedule") Object.assign(body, { end: Math.round(t.end), label: t.label });
+    const r = await fetch(PUSH + "/" + op, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error("server " + r.status);
+    t.pushed = op === "schedule"; save();
+  } catch (e) {
+    t.pushed = false;
+    if (!pushWarned) { pushWarned = true; toast("No connection to the alert server. Alarm still rings while the app is open."); }
+  }
+}
+async function pushTest() {
+  const sub = await pushSub();
+  if (!sub) return enablePush();
+  const r = await fetch(PUSH + "/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: sub.toJSON() }) }).catch(() => null);
+  toast(r && r.ok ? "Test alert on its way. Lock your phone to see it." : "Couldn't reach the alert server");
+}
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => {
+  if (e.data && e.data.type === "timer-pushed") { const t = T.find(x => String(x.id) === String(e.data.id)); if (t) { t.notified = true; save(); } }
+});
+// If the phone dropped the subscription (or notifications were turned off), stop pretending alerts are on.
+if (S.pushOn) pushSub().then(sub => { if (!sub || Notification.permission !== "granted") { S.pushOn = false; save(); } }).catch(() => {});
+
 /* ---------- timers: step timers + a standalone kitchen timer, saved across reloads ---------- */
 let tTick = null, audio = null;
 const T = S.timers;                       // [{id,end,left,paused,label,done,notified}]
@@ -532,9 +594,10 @@ function unlockSound() { try { audio = audio || new (window.AudioContext || wind
 function askNotify() { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().then(() => drawTimers()).catch(() => {}); }
 function startTimer(sec, label) {
   unlockSound(); askNotify();
-  T.push({ id: Date.now() + Math.random(), end: Date.now() + sec * 1000, left: sec * 1000, paused: false, label: label || "Timer", done: false, notified: false });
-  save(); drawTimers(); if (!tTick) tTick = setInterval(drawTimers, 500);
-  toast("Timer started");
+  const t = { id: Date.now() + Math.random(), end: Date.now() + sec * 1000, left: sec * 1000, paused: false, label: label || "Timer", done: false, notified: false };
+  T.push(t); save(); drawTimers(); if (!tTick) tTick = setInterval(drawTimers, 500);
+  pushSync("schedule", t);
+  toast(S.pushOn ? "Timer started · you'll get an alert even if the app is closed" : "Timer started");
 }
 function beep() {
   if (!audio || audio.state !== "running") return;
@@ -543,6 +606,7 @@ function beep() {
 }
 async function notify(t) {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (S.pushOn && t.pushed && !document.hidden) return;   // app is open: the red timer + beeps are the alert; server banner uses the same tag
   const opts = { body: t.label, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "timer-" + t.id, renotify: true, requireInteraction: true, vibrate: [400, 200, 400, 200, 400] };
   try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg) return reg.showNotification("⏰ Timer done", opts); } catch (e) {}
   try { new Notification("⏰ Timer done", opts); } catch (e) {}
@@ -577,9 +641,9 @@ $("#timers").addEventListener("click", e => {
   const p = e.target.closest("[data-tp]"), x = e.target.closest("[data-tx]"), a = e.target.closest("[data-tadd]");
   unlockSound();
   if (e.target.id === "tAllow") askNotify();
-  if (p) { const t = T.find(t => t.id == p.dataset.tp); t.paused = !t.paused; if (!t.paused) t.end = Date.now() + t.left; }
-  if (a) { const t = T.find(t => t.id == a.dataset.tadd); if (t.done) { t.done = false; t.notified = false; t.end = Date.now() + 60000; } else if (t.paused) t.left += 60000; else t.end += 60000; if (!tTick) tTick = setInterval(drawTimers, 500); }
-  if (x) T.splice(T.findIndex(t => t.id == x.dataset.tx), 1);
+  if (p) { const t = T.find(t => t.id == p.dataset.tp); t.paused = !t.paused; if (!t.paused) { t.end = Date.now() + t.left; pushSync("schedule", t); } else pushSync("cancel", t); }
+  if (a) { const t = T.find(t => t.id == a.dataset.tadd); if (t.done) { t.done = false; t.notified = false; t.end = Date.now() + 60000; } else if (t.paused) t.left += 60000; else t.end += 60000; if (!t.paused) pushSync("schedule", t); if (!tTick) tTick = setInterval(drawTimers, 500); }
+  if (x) { const t = T.find(t => t.id == x.dataset.tx); if (t && !t.done) pushSync("cancel", t); T.splice(T.indexOf(t), 1); }
   save(); drawTimers();
 });
 function timerDialog(label) {
@@ -594,13 +658,19 @@ function timerDialog(label) {
       <label class="muted">Seconds<input class="inp" id="tS" type="number" min="0" max="59" value="0" style="width:80px"></label>
       <button class="btn primary" id="tGo">Start</button>
     </div>
-    <p class="muted" style="font-size:12.5px;margin-bottom:0">Timers keep running if you leave this page or reload. You'll get an alert when one finishes (allow notifications when asked). On iPhone, alerts show when the app is open.</p>
+    ${pushBlurb()}
     <div class="row"><button class="btn" data-close>Close</button></div>`, (m, close) => {
     const go = sec => { if (sec > 0) { startTimer(sec, $("#tLbl", m).value.trim() || "Timer"); close(); } };
     $$("[data-pm]", m).forEach(b => b.onclick = () => go(+b.dataset.pm * 60));
     $("#tGo", m).onclick = () => go((+$("#tH", m).value || 0) * 3600 + (+$("#tM", m).value || 0) * 60 + (+$("#tS", m).value || 0));
     $("#tLbl", m).focus();
+    if ($("#pushOn", m)) $("#pushOn", m).onclick = async () => { if (await enablePush()) { close(); timerDialog(label); } };
   });
+}
+function pushBlurb() {
+  if (S.pushOn) return `<p class="muted" style="font-size:12.5px;margin-bottom:0">🔔 Lock-screen alerts are on: you'll get an alert even if the app is closed. Timers also survive reloads.</p>`;
+  if (PUSH) return `<p style="font-size:13px;margin-bottom:0"><button class="btn sm" id="pushOn">🔔 Turn on lock-screen alerts</button> <span class="muted">so timers alert you even when the app is closed.</span></p>`;
+  return `<p class="muted" style="font-size:12.5px;margin-bottom:0">Timers keep running if you leave this page or reload, and alert you while the app is open.</p>`;
 }
 $("#timerBtn").onclick = () => timerDialog("");
 document.addEventListener("visibilitychange", () => { if (!document.hidden) drawTimers(); });
@@ -819,6 +889,11 @@ function viewSettings() {
     <div class="box"><h3>Install on your phone</h3>
       ${standalone ? `<p>✓ Running as an installed app.</p>` : ios ? `<p>On iPhone or iPad: open this site in <b>Safari</b>, tap the <b>Share</b> button, then <b>Add to Home Screen</b>.</p>` : `<p>Add the cookbook to your home screen. It opens full screen and works with no internet.</p><button class="btn primary" id="install" ${installEvt ? "" : "disabled"}>Install app</button>${installEvt ? "" : `<p class="muted" style="font-size:13px">If the button is grayed out, use your browser menu (⋮) → <b>Install app</b> or <b>Add to Home screen</b>.</p>`}`}
       <p class="muted" style="font-size:13px" id="offline">${navigator.serviceWorker && navigator.serviceWorker.controller ? "✓ Saved for offline use." : "Offline copy will be ready after this first visit finishes loading."}</p></div>
+    <div class="box"><h3>Timer alerts</h3>
+      ${!PUSH ? `<p class="muted" style="margin:0">Timers alert you while the app is open. To get alerts even when it's closed, run <b>setup-push.ps1</b> once (see README).</p>`
+        : S.pushOn ? `<p style="margin-top:0">🔔 On for this device. Alerts arrive on the lock screen even when the app is closed.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="pTest">Send a test alert</button><button class="btn" id="pOff">Turn off</button></div>`
+        : `<p style="margin-top:0">Get timer alerts on your lock screen even when the app is closed.${isIOS ? " On iPhone, add the cookbook to your Home Screen and open it from there first." : ""}</p><button class="btn primary" id="pOn">🔔 Turn on lock-screen alerts</button>`}
+    </div>
     <div class="box"><h3>Daily goals (used by the meal planner)</h3>
       <div class="goals">${[["kcal", "Calories"], ["p", "Protein (g)"], ["f", "Fat (g)"], ["c", "Net carbs (g)"]].map(([k, l]) => `<label>${l}<input class="inp" type="number" min="0" data-goal="${k}" value="${g[k]}"></label>`).join("")}</div></div>
     <div class="box"><h3>Appearance</h3><div class="chips">${[["", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<button class="chip ${(S.theme || "") === v ? "on" : ""}" data-th="${v}">${t}</button>`).join("")}</div></div>
@@ -828,6 +903,9 @@ function viewSettings() {
       <p class="muted" style="font-size:13px">${Object.keys(S.fav).length} favorites · ${Object.keys(S.status).length} in want-to-try / tried lists · ${Object.keys(S.notes).length} notes · ${Object.keys(S.rating).length} ratings · ${Object.values(S.made).reduce((a, b) => a + b.length, 0)} cooks logged</p></div>
     <div class="box helpbox"><h3>Search tips</h3>${searchHelp()}</div>
   </div>`;
+  if ($("#pOn")) $("#pOn").onclick = async () => { await enablePush(); viewSettings(); };
+  if ($("#pOff")) $("#pOff").onclick = async () => { await disablePush(); viewSettings(); };
+  if ($("#pTest")) $("#pTest").onclick = pushTest;
   $$("[data-goal]").forEach(i => i.onchange = () => { S.goals[i.dataset.goal] = Math.max(1, +i.value || 1); save(); toast("Goal saved"); });
   $$("[data-th]").forEach(b => b.onclick = () => { S.theme = b.dataset.th || null; applyTheme(); save(); viewSettings(); });
   if ($("#install")) $("#install").onclick = async () => { if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewSettings(); } };

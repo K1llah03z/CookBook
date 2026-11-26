@@ -1,0 +1,20 @@
+# Cloudflare Worker that sends the cookbook's timer alerts.
+# setup-push.ps1 fills in ALLOWED_ORIGINS, VAPID_PUBLIC_KEY and VAPID_SUBJECT for you.
+name = "carnivore-timer-push"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGINS = "https://k1llah03z.github.io"
+VAPID_PUBLIC_KEY = "BCAV8A7Rwka_guTExnlyMLMEyGpUrq7Jy6hbXlEDQw3cwzQLfxd2j1OOzibm04ThvYETYGORIUqbUzbxzGxtZpY"
+VAPID_SUBJECT = "https://k1llah03z.github.io/CookBook/"
+
+[[durable_objects.bindings]]
+name = "TIMERS"
+class_name = "TimerStore"
+
+# Free plan needs SQLite-backed Durable Objects.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TimerStore"]
