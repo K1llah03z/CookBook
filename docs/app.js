@@ -455,6 +455,10 @@ function viewRecipe(id) {
   $("#sPlus").onclick = () => setServ(serv + 1);
   if ($("#sReset")) $("#sReset").onclick = () => { delete curServ[id]; viewRecipe(id); };
   $$("ul.ings li").forEach(li => li.addEventListener("click", e => { const cb = $("input", li); if (e.target !== cb) cb.checked = !cb.checked; li.classList.toggle("got", cb.checked); }));
+  const grow = ta => { ta.style.height = "auto"; const lines = Math.max(4, Math.ceil((ta.scrollHeight - 4) / 28) + 1); ta.style.height = (lines * 28 + 4 + 2) + "px"; };
+  grow($("#notes")); requestAnimationFrame(() => grow($("#notes")));
+  $("#notes").addEventListener("input", e => grow(e.target));
+  window.addEventListener("resize", () => { const t = $("#notes"); if (t) grow(t); }, { once: true });
   let nt; $("#notes").oninput = e => { clearTimeout(nt); nt = setTimeout(() => { const v = e.target.value.trim(); if (v) S.notes[id] = e.target.value; else delete S.notes[id]; save(); }, 300); };
   $$("[data-star]").forEach(b => b.onclick = () => { const n = +b.dataset.star; if (S.rating[id] === n) delete S.rating[id]; else S.rating[id] = n; save(); viewRecipe(id); });
   $$("[data-set]").forEach(b => b.onclick = () => { const k = b.dataset.set; if (S.status[id] === k) delete S.status[id]; else S.status[id] = k; save(); viewRecipe(id); toast(S.status[id] ? "Saved to “" + LISTS.find(x => x[0] === k)[1] + "”" : "Removed from your list"); });
