@@ -1,180 +1,442 @@
-/* Recipe picture generator: draws a top-down plated illustration from a recipe's title and ingredients.
-   dishSVG(recipe, ingredientsList, style)  style: "flat" | "soft"  → SVG string (viewBox 320x200) */
+/* Recipe picture generator: draws a top-down illustration of the dish from its title and ingredients.
+   dishSVG(recipe, ingredients, style, cats) → SVG string (viewBox 320x200). style: "soft" | "flat".
+   dishKind(recipe, ingredients, cats) → the dish type used for the drawing. */
 (function () {
-  const has = (s, re) => re.test(s);
-  function rng(seed) { let x = (seed * 9301 + 49297) % 233280; return () => (x = (x * 9301 + 49297) % 233280) / 233280; }
-  const P = { // palette
+  function rng(seed) { let x = Math.abs(seed | 0) % 233280 || 7; return () => (x = (x * 9301 + 49297) % 233280) / 233280; }
+  const P = {
     sear: "#7a3b22", searD: "#4e2414", fat: "#e9cfa8", pink: "#c96a5f", bone: "#f4eadb",
-    chick: "#d79a45", chickD: "#a86a28", bacon: "#b5443a", baconF: "#f0d2bf", eggW: "#fffdf6", yolk: "#f6b425",
-    patty: "#5e3020", cheese: "#f2b632", sauceW: "#f1e2c4", gravy: "#9a6a3e", curry: "#e09a3c", green: "#5e9b3c",
-    greenD: "#3d7a2a", leaf: "#7cb342", tom: "#e0452f", avo: "#a8c66c", avoD: "#6f8f2f", mush: "#c7a57e", lemon: "#f4d03f",
-    butter: "#f7dc7b", plate: "#ffffff", rim: "#ece6dc"
+    chick: "#d79a45", chickD: "#a86a28", gold: "#e2a84b", goldD: "#b97a2c", bacon: "#b5443a", baconF: "#f0d2bf",
+    eggW: "#fffdf6", yolk: "#f6b425", omelet: "#f5cf5d", patty: "#5e3020", cheese: "#f2b632", sauceW: "#f1e2c4",
+    gravy: "#9a6a3e", curry: "#e09a3c", green: "#5e9b3c", greenD: "#3d7a2a", leaf: "#7cb342", tom: "#e0452f",
+    avo: "#a8c66c", avoD: "#6f8f2f", mush: "#c7a57e", lemon: "#f4d03f", butter: "#f7dc7b", plate: "#ffffff", rim: "#ece6dc",
+    pork: "#c98d6a", porkD: "#9d5f40", lamb: "#8a3f2c", cake: "#f3dfae", cakeD: "#e3c17a", choc: "#6b4128", rind: "#e8c48a"
   };
-  // ----- shapes -----
+  const T = (x, y, s = 1, rot = 0) => `transform="translate(${x} ${y}) rotate(${rot}) scale(${s})"`;
   const blob = (cx, cy, rx, ry, rot, fill, extra = "") => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" transform="rotate(${rot} ${cx} ${cy})" fill="${fill}" ${extra}/>`;
-  function steak(x, y, s, rot, cut) {
-    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
-    o += `<path d="M-46,-22 C-30,-36 18,-34 40,-22 C56,-12 52,18 34,28 C10,40 -30,36 -46,20 C-58,8 -56,-12 -46,-22Z" fill="${P.sear}"/>`;
+  const dots = (x, y, rad, r, n, col, size = 1.8, sq = false) => { let o = ""; for (let i = 0; i < n; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * rad; const px = x + Math.cos(a) * d, py = y + Math.sin(a) * d * .8, z = size * (.7 + r() * .6); o += sq ? `<rect x="${px}" y="${py}" width="${z * 1.3}" height="${z * 1.3}" fill="${col}"/>` : `<circle cx="${px}" cy="${py}" r="${z}" fill="${col}"/>`; } return o; };
+
+  // ---------- proteins ----------
+  function steak(x, y, s, rot, cut, col = P.sear) {
+    let o = `<g ${T(x, y, s, rot)}><path d="M-46,-22 C-30,-36 18,-34 40,-22 C56,-12 52,18 34,28 C10,40 -30,36 -46,20 C-58,8 -56,-12 -46,-22Z" fill="${col}"/>`;
     o += `<path d="M-46,-22 C-30,-36 18,-34 40,-22 C48,-17 52,-8 52,0 C40,-14 -20,-26 -50,-8 C-52,-14 -50,-18 -46,-22Z" fill="${P.fat}" opacity=".85"/>`;
-    for (let i = -2; i <= 2; i++) o += `<line x1="${i * 16 - 10}" y1="-16" x2="${i * 16 + 6}" y2="22" stroke="${P.searD}" stroke-width="4" stroke-linecap="round" opacity=".55"/>`;
+    for (let i = -2; i <= 2; i++) o += `<line x1="${i * 16 - 10}" y1="-16" x2="${i * 16 + 6}" y2="22" stroke="${P.searD}" stroke-width="4" stroke-linecap="round" opacity=".5"/>`;
     if (cut) o += `<path d="M20,-18 C34,-12 40,10 30,22 L18,26 C26,10 24,-6 14,-16Z" fill="${P.pink}"/>`;
     return o + "</g>";
   }
-  function chop(x, y, s, rot, lamb) {
-    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
-    o += `<rect x="18" y="-5" width="${lamb ? 36 : 22}" height="10" rx="5" fill="${P.bone}" stroke="#ddd0bd"/>`;
-    o += `<path d="M-30,-20 C-10,-30 20,-24 24,-6 C28,10 14,26 -6,26 C-26,26 -40,10 -38,-4 C-37,-12 -34,-17 -30,-20Z" fill="${lamb ? "#8a3f2c" : "#b97a4f"}"/>`;
-    o += `<path d="M-30,-20 C-10,-30 20,-24 24,-6 C14,-18 -14,-22 -36,-10 C-35,-15 -33,-18 -30,-20Z" fill="${P.fat}" opacity=".8"/>`;
-    o += `<line x1="-20" y1="-8" x2="-4" y2="16" stroke="${P.searD}" stroke-width="3" opacity=".45"/><line x1="-6" y1="-12" x2="10" y2="12" stroke="${P.searD}" stroke-width="3" opacity=".45"/>`;
+  function slices(x, y, s, n, outer, inner, rot = -10) { // fanned slices of a roast / brisket / duck breast
+    let o = `<g ${T(x, y, s, rot)}>`;
+    for (let i = 0; i < n; i++) o += `<g transform="translate(${(i - (n - 1) / 2) * 17} ${i % 2 ? 3 : -3})"><rect x="-10" y="-30" width="22" height="60" rx="7" fill="${outer}"/><rect x="-6" y="-25" width="14" height="50" rx="5" fill="${inner}"/></g>`;
     return o + "</g>";
   }
-  function thigh(x, y, s, rot) {
-    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
-    o += `<path d="M-28,-14 C-18,-28 22,-26 30,-8 C36,8 22,24 0,24 C-22,24 -36,8 -28,-14Z" fill="${P.chick}"/>`;
-    o += `<path d="M-20,-12 C-8,-20 14,-18 22,-8" stroke="#f1c47e" stroke-width="5" fill="none" stroke-linecap="round" opacity=".8"/>`;
-    o += `<circle cx="-8" cy="6" r="3" fill="${P.chickD}"/><circle cx="10" cy="10" r="2.5" fill="${P.chickD}"/><circle cx="14" cy="-4" r="2" fill="${P.chickD}"/>`;
+  function chop(x, y, s, rot, col = P.pork, boneLen = 22) {
+    let o = `<g ${T(x, y, s, rot)}><rect x="18" y="-5" width="${boneLen}" height="10" rx="5" fill="${P.bone}" stroke="#ddd0bd"/>`;
+    o += `<path d="M-30,-20 C-10,-30 20,-24 24,-6 C28,10 14,26 -6,26 C-26,26 -40,10 -38,-4 C-37,-12 -34,-17 -30,-20Z" fill="${col}"/>`;
+    o += `<path d="M-30,-20 C-10,-30 20,-24 24,-6 C14,-18 -14,-22 -36,-10 C-35,-15 -33,-18 -30,-20Z" fill="${P.fat}" opacity=".8"/>`;
+    o += `<line x1="-20" y1="-8" x2="-4" y2="16" stroke="${P.searD}" stroke-width="3" opacity=".4"/><line x1="-6" y1="-12" x2="10" y2="12" stroke="${P.searD}" stroke-width="3" opacity=".4"/>`;
     return o + "</g>";
+  }
+  function thigh(x, y, s, rot, col = P.chick) {
+    return `<g ${T(x, y, s, rot)}><path d="M-28,-14 C-18,-28 22,-26 30,-8 C36,8 22,24 0,24 C-22,24 -36,8 -28,-14Z" fill="${col}"/><path d="M-20,-12 C-8,-20 14,-18 22,-8" stroke="#f1c47e" stroke-width="5" fill="none" stroke-linecap="round" opacity=".8"/><circle cx="-8" cy="6" r="3" fill="${P.chickD}"/><circle cx="10" cy="10" r="2.5" fill="${P.chickD}"/><circle cx="14" cy="-4" r="2" fill="${P.chickD}"/></g>`;
+  }
+  function breast(x, y, s, rot) {
+    return `<g ${T(x, y, s, rot)}><path d="M-44,-6 C-40,-26 10,-30 38,-14 C52,-6 46,16 26,22 C0,30 -40,22 -44,-6Z" fill="${P.chick}"/><line x1="-26" y1="-14" x2="-10" y2="16" stroke="${P.chickD}" stroke-width="4" opacity=".5" stroke-linecap="round"/><line x1="-4" y1="-18" x2="12" y2="14" stroke="${P.chickD}" stroke-width="4" opacity=".5" stroke-linecap="round"/><line x1="18" y1="-14" x2="30" y2="10" stroke="${P.chickD}" stroke-width="4" opacity=".5" stroke-linecap="round"/></g>`;
+  }
+  function drumstick(x, y, s, rot, col = P.chick) {
+    return `<g ${T(x, y, s, rot)}><rect x="14" y="-4" width="26" height="8" rx="4" fill="${P.bone}"/><circle cx="42" cy="-4" r="5" fill="${P.bone}"/><circle cx="42" cy="4" r="5" fill="${P.bone}"/><path d="M-30,0 C-30,-20 -4,-24 18,-6 L18,6 C-4,24 -30,20 -30,0Z" fill="${col}"/><circle cx="-14" cy="-4" r="3" fill="${P.chickD}" opacity=".7"/><circle cx="-4" cy="6" r="2.5" fill="${P.chickD}" opacity=".7"/></g>`;
+  }
+  function wholeBird(x, y, s, col = P.gold) {
+    return `<g ${T(x, y, s)}><ellipse cx="0" cy="0" rx="52" ry="40" fill="${col}"/><ellipse cx="-6" cy="-8" rx="30" ry="18" fill="#f0c372" opacity=".6"/><g>${drumstick(-34, 30, .55, 140, col)}${drumstick(34, 30, .55, 40, col)}</g><path d="M-30,-10 C-10,-20 10,-20 30,-10" stroke="${P.goldD}" stroke-width="3" fill="none" opacity=".5"/></g>`;
   }
   function bacon(x, y, s, rot) {
-    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
-    o += `<path d="M-50,0 C-38,-10 -26,10 -14,0 C-2,-10 10,10 22,0 C34,-10 44,8 52,0 L52,12 C44,20 34,2 22,12 C10,22 -2,2 -14,12 C-26,22 -38,2 -50,12Z" fill="${P.bacon}"/>`;
-    o += `<path d="M-50,5 C-38,-5 -26,15 -14,5 C-2,-5 10,15 22,5 C34,-5 44,13 52,5" stroke="${P.baconF}" stroke-width="2.5" fill="none"/>`;
+    return `<g ${T(x, y, s, rot)}><path d="M-50,0 C-38,-10 -26,10 -14,0 C-2,-10 10,10 22,0 C34,-10 44,8 52,0 L52,12 C44,20 34,2 22,12 C10,22 -2,2 -14,12 C-26,22 -38,2 -50,12Z" fill="${P.bacon}"/><path d="M-50,5 C-38,-5 -26,15 -14,5 C-2,-5 10,15 22,5 C34,-5 44,13 52,5" stroke="${P.baconF}" stroke-width="2.5" fill="none"/></g>`;
+  }
+  function belly(x, y, s, rot) { // pork belly cubes / slab
+    let o = `<g ${T(x, y, s, rot)}>`;
+    for (let i = 0; i < 6; i++) { const cx = (i % 3) * 26 - 26, cy = Math.floor(i / 3) * 26 - 13; o += `<rect x="${cx - 11}" y="${cy - 11}" width="22" height="22" rx="4" fill="#f3dcc4"/><rect x="${cx - 11}" y="${cy - 11}" width="22" height="7" rx="3" fill="#c0703c"/><rect x="${cx - 11}" y="${cy + 1}" width="22" height="4" fill="#c98d6a"/>`; }
     return o + "</g>";
   }
-  function egg(x, y, s, rot) {
-    return `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})"><path d="M-26,-6 C-24,-22 -4,-26 10,-22 C26,-18 30,-2 26,10 C22,22 4,26 -10,22 C-24,18 -28,6 -26,-6Z" fill="${P.eggW}" stroke="#efe6d3"/><circle cx="0" cy="0" r="10" fill="${P.yolk}"/><circle cx="-3" cy="-3" r="3" fill="#fff" opacity=".5"/></g>`;
-  }
+  const egg = (x, y, s, rot) => `<g ${T(x, y, s, rot)}><path d="M-26,-6 C-24,-22 -4,-26 10,-22 C26,-18 30,-2 26,10 C22,22 4,26 -10,22 C-24,18 -28,6 -26,-6Z" fill="${P.eggW}" stroke="#efe6d3"/><circle cx="0" cy="0" r="10" fill="${P.yolk}"/><circle cx="-3" cy="-3" r="3" fill="#fff" opacity=".5"/></g>`;
+  const halfEgg = (x, y, s, rot, piped) => `<g ${T(x, y, s, rot)}><ellipse rx="20" ry="13" fill="${P.eggW}" stroke="#eadfca"/>${piped ? `<circle r="9" fill="#f7d36a"/><circle cx="-3" cy="-2" r="4" fill="#f9e08f"/><circle cx="1" cy="0" r="1.6" fill="#c0392b"/>` : `<circle r="8" fill="${P.yolk}"/>`}</g>`;
+  function scrambled(x, y, s, r, col = P.omelet) { let o = ""; for (let i = 0; i < 14; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * 38 * s; o += blob(x + Math.cos(a) * d, y + Math.sin(a) * d * .75, 13 * s, 9 * s, r() * 180, i % 3 ? col : "#f8dd84"); } return o; }
+  const omelet = (x, y, s, rot) => `<g ${T(x, y, s, rot)}><path d="M-52,6 C-52,-30 52,-30 52,6 C30,16 -30,16 -52,6Z" fill="${P.omelet}"/><path d="M-44,2 C-30,10 30,10 44,2" stroke="#e6b23c" stroke-width="3" fill="none"/><circle cx="-14" cy="-10" r="3" fill="#e9b949"/><circle cx="12" cy="-14" r="2.5" fill="#e9b949"/></g>`;
   function patty(x, y, s, cheese) {
-    let o = `<g transform="translate(${x} ${y}) scale(${s})"><circle r="34" fill="${P.patty}"/><circle r="34" fill="none" stroke="#3e1d12" stroke-width="3" stroke-dasharray="6 5" opacity=".5"/>`;
+    let o = `<g ${T(x, y, s)}><circle r="34" fill="${P.patty}"/><circle r="34" fill="none" stroke="#3e1d12" stroke-width="3" stroke-dasharray="6 5" opacity=".5"/>`;
     if (cheese) o += `<path d="M-26,-22 L24,-24 L28,14 L14,8 L6,26 L-4,10 L-18,22 L-22,4 L-30,10Z" fill="${P.cheese}" opacity=".95"/>`;
     return o + "</g>";
   }
-  const meatballs = (x, y, s, r) => { let o = ""; for (let i = 0; i < 5; i++) { const a = i * 1.26 + r() * .4, d = 22; o += `<circle cx="${x + Math.cos(a) * d * s}" cy="${y + Math.sin(a) * d * s}" r="${13 * s}" fill="#7d4027"/><circle cx="${x + Math.cos(a) * d * s - 4 * s}" cy="${y + Math.sin(a) * d * s - 4 * s}" r="${4 * s}" fill="#a3603d"/>`; } return o; };
-  const sausage = (x, y, s, rot) => `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})"><rect x="-40" y="-9" width="80" height="18" rx="9" fill="#9b4a2c"/><path d="M-30,-4 L30,-4" stroke="#c4744c" stroke-width="3" stroke-linecap="round"/></g>`;
-  const crumbles = (x, y, s, r, col) => { let o = ""; for (let i = 0; i < 40; i++) { const a = r() * 6.28, d = r() * 40 * s; o += `<circle cx="${x + Math.cos(a) * d}" cy="${y + Math.sin(a) * d * .8}" r="${(3 + r() * 4) * s}" fill="${col}"/>`; } return o; };
-  const pool = (x, y, rx, ry, col) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="${col}"/>`;
-  // garnish
+  const meatballs = (x, y, s, r, col = "#7d4027") => { let o = ""; for (let i = 0; i < 6; i++) { const a = i * 1.05 + r() * .3, d = i === 5 ? 0 : 26; o += `<circle cx="${x + Math.cos(a) * d * s}" cy="${y + Math.sin(a) * d * s}" r="${13 * s}" fill="${col}"/><circle cx="${x + Math.cos(a) * d * s - 4 * s}" cy="${y + Math.sin(a) * d * s - 4 * s}" r="${4 * s}" fill="#a3603d"/>`; } return o; };
+  const sausage = (x, y, s, rot, col = "#9b4a2c") => `<g ${T(x, y, s, rot)}><rect x="-40" y="-9" width="80" height="18" rx="9" fill="${col}"/><path d="M-30,-4 L30,-4" stroke="#c4744c" stroke-width="3" stroke-linecap="round"/><line x1="-14" y1="-8" x2="-10" y2="8" stroke="#5e2a16" stroke-width="2" opacity=".5"/><line x1="8" y1="-8" x2="12" y2="8" stroke="#5e2a16" stroke-width="2" opacity=".5"/></g>`;
+  const crumbles = (x, y, s, r, col, n = 40, rad = 40) => { let o = ""; for (let i = 0; i < n; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * rad * s; o += `<circle cx="${x + Math.cos(a) * d}" cy="${y + Math.sin(a) * d * .8}" r="${(3 + r() * 4) * s}" fill="${col}"/>`; } return o; };
+  const shredded = (x, y, s, r, col = "#a8653d") => { let o = ""; for (let i = 0; i < 46; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * 40 * s, px = x + Math.cos(a) * d, py = y + Math.sin(a) * d * .75, ang = r() * 6.28; o += `<line x1="${px}" y1="${py}" x2="${px + Math.cos(ang) * 12 * s}" y2="${py + Math.sin(ang) * 12 * s}" stroke="${i % 4 ? col : "#7a3f22"}" stroke-width="${3.4 * s}" stroke-linecap="round"/>`; } return o; };
+  function ribs(x, y, s, rot, col = "#8a3a22") {
+    let o = `<g ${T(x, y, s, rot)}><rect x="-56" y="-26" width="112" height="52" rx="16" fill="${col}"/><rect x="-56" y="-26" width="112" height="52" rx="16" fill="#b8562e" opacity=".35"/>`;
+    for (let i = -2; i <= 2; i++) o += `<rect x="${i * 22 - 3}" y="-34" width="7" height="14" rx="3" fill="${P.bone}"/><line x1="${i * 22}" y1="-22" x2="${i * 22}" y2="22" stroke="#5a2412" stroke-width="2" opacity=".5"/>`;
+    return o + "</g>";
+  }
+  const wing = (x, y, s, rot) => `<g ${T(x, y, s, rot)}><path d="M-22,-8 C-18,-20 4,-20 10,-10 L26,-14 C34,-12 34,2 26,4 L8,6 C2,18 -20,16 -22,-8Z" fill="#c9562c"/><circle cx="-8" cy="-4" r="2.5" fill="#8a2f14" opacity=".7"/><circle cx="16" cy="-6" r="2" fill="#8a2f14" opacity=".7"/></g>`;
+  function skewers(x, y, s, rot, col, alt) {
+    let o = `<g ${T(x, y, s, rot)}>`;
+    for (let k = -1; k <= 1; k += 2) { o += `<line x1="-62" y1="${k * 16}" x2="62" y2="${k * 16}" stroke="#c9a77c" stroke-width="3"/>`; for (let i = -2; i <= 2; i++) o += `<rect x="${i * 22 - 9}" y="${k * 16 - 9}" width="18" height="18" rx="5" fill="${i % 2 ? (alt || col) : col}"/>`; }
+    return o + "</g>";
+  }
+  const jerky = (x, y, s, r) => { let o = ""; for (let i = 0; i < 6; i++) o += `<g ${T(x + (i % 3) * 30 - 30, y + Math.floor(i / 3) * 28 - 14, s, -20 + r() * 40)}><path d="M-22,-6 L20,-9 L24,5 L-20,8Z" fill="#5c2a17"/><path d="M-16,-2 L16,-4" stroke="#7c3f24" stroke-width="2"/></g>`; return o; };
+  const marrow = (x, y, s) => `<g ${T(x, y, s, -10)}>${[0, 1].map(i => `<g transform="translate(${i * 40 - 20} ${i * 8})"><ellipse rx="16" ry="44" fill="${P.bone}" stroke="#ddd0bd" stroke-width="2"/><ellipse rx="9" ry="36" fill="#c98a56"/></g>`).join("")}</g>`;
+  const cutlets = (x, y, s, r) => { let o = ""; for (let i = 0; i < 3; i++) o += `<g ${T(x + (i - 1) * 30, y + (i % 2) * 10 - 5, s, -15 + i * 12)}><path d="M-26,-14 C-10,-24 20,-20 26,-6 C30,10 10,22 -8,20 C-28,18 -34,0 -26,-14Z" fill="#d9a04c"/>${dots(0, 0, 18, r, 14, "#b9792e", 1.6)}</g>`; return o; };
+
+  // ---------- breakfast & baking ----------
+  function pancakes(x, y, s, col = P.cake) {
+    let o = `<g ${T(x, y, s)}>`;
+    for (let i = 3; i >= 0; i--) o += `<ellipse cx="0" cy="${i * 7}" rx="48" ry="30" fill="${P.goldD}"/><ellipse cx="0" cy="${i * 7 - 2}" rx="46" ry="28" fill="${col}"/>`;
+    o += `<ellipse cx="0" cy="-2" rx="46" ry="28" fill="${P.gold}" opacity=".55"/><rect x="-9" y="-12" width="18" height="13" rx="2" fill="${P.butter}" stroke="#e6c25c"/>`;
+    return o + "</g>";
+  }
+  function waffle(x, y, s, rot, col = "#e0a94e") {
+    let o = `<g ${T(x, y, s, rot)}><rect x="-40" y="-40" width="80" height="80" rx="12" fill="${col}"/>`;
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) o += `<rect x="${i * 24 - 9}" y="${j * 24 - 9}" width="18" height="18" rx="3" fill="#b9792e" opacity=".6"/>`;
+    return o + "</g>";
+  }
+  const toast = (x, y, s, rot) => `<g ${T(x, y, s, rot)}><path d="M-34,-30 C-34,-44 34,-44 34,-30 L34,32 L-34,32Z" fill="#c98a3c"/><path d="M-28,-26 C-28,-36 28,-36 28,-26 L28,26 L-28,26Z" fill="#f0c36d"/></g>`;
+  const crepe = (x, y, s, rot) => `<g ${T(x, y, s, rot)}><path d="M-50,30 L0,-40 L50,30Z" fill="#f2cf7c"/><path d="M-50,30 L0,-40 L50,30" fill="none" stroke="#d9a548" stroke-width="3"/><circle cx="-6" cy="8" r="3" fill="#d9a548" opacity=".6"/><circle cx="12" cy="18" r="2.5" fill="#d9a548" opacity=".6"/></g>`;
+  const muffins = (x, y, s, r, col = "#e7b65a", top) => { let o = ""; for (let i = 0; i < 4; i++) { const cx = x + (i % 2) * 52 - 26, cy = y + Math.floor(i / 2) * 46 - 23; o += `<circle cx="${cx}" cy="${cy}" r="${22 * s}" fill="#d5c2a4"/><circle cx="${cx}" cy="${cy}" r="${18 * s}" fill="${col}"/>${dots(cx, cy, 12 * s, r, 7, top || "#c0703c", 2)}`; } return o; };
+  const loaf = (x, y, s, rot, col = "#e9c67a", crumb = "#f7e7bd") => { let o = `<g ${T(x, y, s, rot)}><rect x="-60" y="-30" width="70" height="60" rx="16" fill="#c98a3c"/>`; for (let i = 0; i < 3; i++) o += `<g transform="translate(${30 + i * 14} ${i * 3})"><rect x="-6" y="-30" width="14" height="60" rx="6" fill="#c98a3c"/><rect x="-3" y="-26" width="9" height="52" rx="4" fill="${crumb}"/></g>`; return o + `<rect x="-56" y="-26" width="62" height="10" rx="5" fill="${col}" opacity=".7"/></g>`; };
+  function pizza(x, y, s, r, pep = true, crust = "#e7b062") {
+    let o = `<g ${T(x, y, s)}><circle r="70" fill="${crust}"/><circle r="60" fill="#d8573b"/><circle r="56" fill="#f6d57a" opacity=".92"/>`;
+    o += dots(0, 0, 48, r, 26, "#f1c34f", 5);
+    if (pep) for (let i = 0; i < 9; i++) { const a = i * .7 + r() * .3, d = 16 + (i % 3) * 14; o += `<circle cx="${Math.cos(a) * d}" cy="${Math.sin(a) * d}" r="8" fill="#b8352a"/><circle cx="${Math.cos(a) * d - 2}" cy="${Math.sin(a) * d - 2}" r="2" fill="#d9584a"/>`; }
+    for (let k = 0; k < 3; k++) o += `<line x1="0" y1="0" x2="${Math.cos(k * 2.1) * 70}" y2="${Math.sin(k * 2.1) * 70}" stroke="#c98a3c" stroke-width="2" opacity=".6"/>`;
+    return o + "</g>";
+  }
+  function bakingDish(x, y, s, top, r, specks) {
+    let o = `<g ${T(x, y, s)}><rect x="-92" y="-62" width="184" height="124" rx="18" fill="#f3efe9" stroke="#dcd3c7" stroke-width="3"/><rect x="-80" y="-50" width="160" height="100" rx="12" fill="${top}"/>`;
+    o += dots(0, 0, 70, r, 30, "#c98a3c", 4) + (specks || "");
+    o += `<rect x="-100" y="-14" width="10" height="28" rx="5" fill="#dcd3c7"/><rect x="90" y="-14" width="10" height="28" rx="5" fill="#dcd3c7"/>`;
+    return o + "</g>";
+  }
+  const skillet = (cx, cy, R, fill = "#2f2c2a") => `<g class="pl"><rect x="${cx + R - 6}" y="${cy - 9}" width="70" height="18" rx="9" fill="#2f2c2a"/><circle cx="${cx}" cy="${cy}" r="${R}" fill="#3a3633"/><circle cx="${cx}" cy="${cy}" r="${R - 8}" fill="${fill}"/></g>`;
+  const board = (cx, cy) => `<g class="pl"><rect x="${cx - 120}" y="${cy - 72}" width="240" height="144" rx="18" fill="#c89a63"/><rect x="${cx - 120}" y="${cy - 72}" width="240" height="144" rx="18" fill="none" stroke="#a87a45" stroke-width="3"/><circle cx="${cx + 108}" cy="${cy}" r="6" fill="#a87a45"/></g>`;
+
+  // ---------- desserts ----------
+  const cakeSlice = (x, y, s, rot, sponge = P.cake, frost = "#fff6e4", top) => `<g ${T(x, y, s, rot)}><path d="M-44,46 L0,-52 L44,46 Q0,62 -44,46Z" fill="${P.cakeD}" transform="translate(4 5)" opacity=".7"/><path d="M-44,46 L0,-52 L44,46 Q0,62 -44,46Z" fill="${sponge}"/><path d="M-30,16 L30,16" stroke="${frost}" stroke-width="6" opacity=".9"/><path d="M-44,46 Q0,62 44,46" stroke="${frost}" stroke-width="9" fill="none" stroke-linecap="round"/>${top || ""}</g>`;
+  function cheesecake(x, y, s, col = "#f8ecd0", crust = "#c98a3c", top) {
+    return `<g ${T(x, y, s)}><path d="M-44,46 L0,-52 L44,46 Q0,62 -44,46Z" fill="#000" opacity=".08" transform="translate(4 5)"/><path d="M-44,46 L0,-52 L44,46 Q0,62 -44,46Z" fill="${col}"/><path d="M-44,46 Q0,62 44,46" stroke="${crust}" stroke-width="9" fill="none" stroke-linecap="round"/>${top || ""}</g>`;
+  }
+  const cookies = (x, y, s, r, col = "#e2b15e", chips) => { let o = ""; for (let i = 0; i < 6; i++) { const a = i * 1.05, d = i === 5 ? 0 : 40; const cx = x + Math.cos(a) * d * s, cy = y + Math.sin(a) * d * s * .8; o += `<circle cx="${cx}" cy="${cy}" r="${19 * s}" fill="${col}"/><circle cx="${cx}" cy="${cy}" r="${19 * s}" fill="none" stroke="#b9792e" stroke-width="2" opacity=".5"/>${chips ? dots(cx, cy, 12 * s, r, 5, P.choc, 2.4) : dots(cx, cy, 12 * s, r, 4, "#c68b3a", 1.4)}`; } return o; };
+  const bites = (x, y, s, r, col, coat) => { let o = ""; for (let i = 0; i < 7; i++) { const a = i * .9, d = i === 6 ? 0 : 36; const cx = x + Math.cos(a) * d * s, cy = y + Math.sin(a) * d * s * .8; o += `<circle cx="${cx}" cy="${cy}" r="${14 * s}" fill="${col}"/><circle cx="${cx - 4 * s}" cy="${cy - 4 * s}" r="${4 * s}" fill="#fff" opacity=".35"/>${coat ? dots(cx, cy, 10 * s, r, 5, coat, 1.4) : ""}`; } return o; };
+  const squares = (x, y, s, col, top) => { let o = ""; for (let i = 0; i < 6; i++) { const cx = x + (i % 3) * 38 - 38, cy = y + Math.floor(i / 3) * 38 - 19; o += `<rect x="${cx - 16}" y="${cy - 16}" width="32" height="32" rx="5" fill="${col}"/>${top ? `<rect x="${cx - 16}" y="${cy - 16}" width="32" height="9" rx="4" fill="${top}"/>` : ""}`; } return o; };
+  const scoops = (x, y, cols, r) => { let o = ""; cols.forEach((c, i) => { const cx = x + (i - (cols.length - 1) / 2) * 34, cy = y + (i % 2) * 8 - 4; o += `<circle cx="${cx}" cy="${cy}" r="24" fill="${c}"/><path d="M${cx - 22},${cy + 6} q6,8 12,2 q6,8 12,2 q6,8 12,2 q6,8 10,0" fill="${c}" stroke="${c}" stroke-width="3"/><circle cx="${cx - 7}" cy="${cy - 8}" r="6" fill="#fff" opacity=".35"/>`; }); return o; };
+  const pops = (x, y, col) => { let o = ""; for (let i = 0; i < 3; i++) { const cx = x + (i - 1) * 46; o += `<g transform="rotate(${(i - 1) * 8} ${cx} ${y})"><rect x="${cx - 4}" y="${y + 22}" width="8" height="34" rx="3" fill="#e2c9a0"/><rect x="${cx - 17}" y="${y - 40}" width="34" height="66" rx="15" fill="${col}"/><rect x="${cx - 11}" y="${y - 34}" width="8" height="40" rx="4" fill="#fff" opacity=".3"/></g>`; } return o; };
+  const meringues = (x, y, r) => { let o = ""; for (let i = 0; i < 7; i++) { const a = i * .9, d = i === 6 ? 0 : 40; const cx = x + Math.cos(a) * d, cy = y + Math.sin(a) * d * .8; o += `<circle cx="${cx}" cy="${cy}" r="16" fill="#fbf6ec"/><path d="M${cx - 12},${cy} q12,-26 24,0" fill="#fffdf8" stroke="#efe5d2"/><circle cx="${cx}" cy="${cy - 10}" r="4" fill="#fffdf8"/>`; } return o; };
+  const whippedBowl = (cx, cy, col = "#fffaf0") => `<g class="pl"><circle cx="${cx}" cy="${cy}" r="70" fill="#f6f1e8"/><circle cx="${cx}" cy="${cy}" r="62" fill="${col}"/>${[0, 1, 2, 3, 4].map(i => `<path d="M${cx - 40 + i * 18},${cy + 10 - (i % 2) * 18} q10,-18 20,0" fill="none" stroke="#ece2cf" stroke-width="3"/>`).join("")}</g>`;
+  const pie = (x, y, s, fill, crust = "#d9a24a") => `<g ${T(x, y, s)}><circle r="72" fill="${crust}"/><circle r="62" fill="${fill}"/><path d="M0,0 L62,0 A62,62 0 0 1 31,53.7Z" fill="#fff" opacity=".18"/><line x1="0" y1="0" x2="62" y2="0" stroke="${crust}" stroke-width="3"/><line x1="0" y1="0" x2="31" y2="53.7" stroke="${crust}" stroke-width="3"/></g>`;
+
+  // ---------- snacks ----------
+  const chips = (x, y, s, r, col = "#efc35a", spot) => { let o = ""; for (let i = 0; i < 14; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * 50 * s; const cx = x + Math.cos(a) * d, cy = y + Math.sin(a) * d * .75; o += `<path d="M${cx - 13},${cy} C${cx - 10},${cy - 12} ${cx + 10},${cy - 12} ${cx + 13},${cy - 2} C${cx + 10},${cy + 10} ${cx - 8},${cy + 12} ${cx - 13},${cy}Z" fill="${col}" stroke="#d29b3a" stroke-width="1.2" transform="rotate(${r() * 180} ${cx} ${cy})"/>${spot ? `<circle cx="${cx}" cy="${cy}" r="3" fill="${spot}"/>` : ""}`; } return o; };
+  const rinds = (x, y, s, r) => { let o = ""; for (let i = 0; i < 12; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * 46 * s; const cx = x + Math.cos(a) * d, cy = y + Math.sin(a) * d * .75; o += `<path d="M${cx - 14},${cy - 4} C${cx - 10},${cy - 14} ${cx + 8},${cy - 14} ${cx + 14},${cy - 6} C${cx + 18},${cy + 4} ${cx + 6},${cy + 14} ${cx - 4},${cy + 10} C${cx - 14},${cy + 8} ${cx - 18},${cy + 2} ${cx - 14},${cy - 4}Z" fill="${P.rind}" stroke="#cf9f57" transform="rotate(${r() * 180} ${cx} ${cy})"/>${dots(cx, cy, 8, r, 4, "#f7e3b8", 1.6)}`; } return o; };
+  const sticks = (x, y, s, r, col = "#e9b44c") => { let o = ""; for (let i = 0; i < 7; i++) o += `<rect x="${x - 50 + (r() * 10)}" y="${y - 40 + i * 12}" width="${80 + r() * 20}" height="12" rx="6" fill="${col}" transform="rotate(${-12 + r() * 24} ${x} ${y - 40 + i * 12})"/><rect x="${x - 40}" y="${y - 38 + i * 12}" width="40" height="3" rx="2" fill="#fff" opacity=".35" transform="rotate(${-12 + r() * 24} ${x} ${y - 40 + i * 12})"/>`; return o; };
+  const cheeseWedge = (x, y, s, rot, col = "#f6d46a") => `<g ${T(x, y, s, rot)}><path d="M-40,22 L36,22 L36,-4 L-40,-26Z" fill="${col}"/><path d="M-40,-26 L36,-4 L36,22" fill="none" stroke="#e2b23e" stroke-width="2"/><circle cx="-6" cy="4" r="5" fill="#e9be4c"/><circle cx="18" cy="10" r="4" fill="#e9be4c"/></g>`;
+  const cubes = (x, y, s, r, col = "#f3cf68") => { let o = ""; for (let i = 0; i < 9; i++) { const cx = x + (i % 3) * 30 - 30 + r() * 6, cy = y + Math.floor(i / 3) * 28 - 28 + r() * 6; o += `<rect x="${cx - 11}" y="${cy - 11}" width="22" height="22" rx="3" fill="${col}"/><rect x="${cx - 11}" y="${cy - 11}" width="22" height="6" rx="3" fill="#fff" opacity=".25"/>`; } return o; };
+  const rolls = (x, y, s, outer, inner) => { let o = ""; for (let i = 0; i < 5; i++) { const cx = x + (i % 3) * 36 - 36 + (i > 2 ? 18 : 0), cy = y + (i > 2 ? 22 : -18); o += `<circle cx="${cx}" cy="${cy}" r="15" fill="${outer}"/><path d="M${cx},${cy} m-9,0 a9,9 0 1,0 18,0 a6,6 0 1,0 -12,0 a3,3 0 1,0 6,0" fill="none" stroke="${inner}" stroke-width="3"/>`; } return o; };
+  const salamiRounds = (x, y, r, n = 10, col = "#b23a3a") => { let o = ""; for (let i = 0; i < n; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * 44, cx = x + Math.cos(a) * d, cy = y + Math.sin(a) * d * .7; o += `<circle cx="${cx}" cy="${cy}" r="13" fill="${col}"/>${dots(cx, cy, 9, r, 6, "#f2d5c8", 1.4)}`; } return o; };
+  const lettuceCups = (x, y, r, fill) => { let o = ""; for (let i = 0; i < 3; i++) { const cx = x + (i - 1) * 48, cy = y + (i % 2) * 10; o += `<path d="M${cx - 28},${cy} C${cx - 30},${cy - 26} ${cx + 30},${cy - 26} ${cx + 28},${cy} C${cx + 24},${cy + 22} ${cx - 24},${cy + 22} ${cx - 28},${cy}Z" fill="#8fc75a" stroke="${P.green}" stroke-width="2"/>${fill(cx, cy)}`; } return o; };
+  const tacos = (x, y, r, shell, fill) => { let o = ""; for (let i = 0; i < 3; i++) { const cx = x + (i - 1) * 50, cy = y + (i % 2) * 8; o += `<path d="M${cx - 26},${cy + 16} A26,30 0 0 1 ${cx + 26},${cy + 16}Z" fill="${shell}"/><path d="M${cx - 20},${cy + 6} q20,-24 40,0" fill="none" stroke="${shell}" stroke-width="3"/>${fill(cx, cy)}`; } return o; };
+  const wraps = (x, y, s, col = "#f3e2b4") => { let o = ""; for (let i = 0; i < 2; i++) o += `<g ${T(x + (i - .5) * 56, y + i * 6, s, 20)}><rect x="-24" y="-46" width="48" height="92" rx="22" fill="${col}"/><ellipse cx="0" cy="-36" rx="20" ry="11" fill="#b5443a"/><ellipse cx="0" cy="-38" rx="14" ry="6" fill="#f6d46a"/></g>`; return o; };
+  const sliders = (x, y, s, r) => { let o = ""; for (let i = 0; i < 3; i++) { const cx = x + (i - 1) * 54, cy = y + (i % 2) * 10; o += `<circle cx="${cx}" cy="${cy}" r="24" fill="${P.patty}"/><path d="M${cx - 20},${cy - 14} L${cx + 18},${cy - 16} L${cx + 20},${cy + 8} L${cx},${cy + 2} L${cx - 18},${cy + 12}Z" fill="${P.cheese}"/>`; } return o; };
+  const jar = (cx, cy, fill, label) => `<g class="pl"><rect x="${cx - 40}" y="${cy - 60}" width="80" height="108" rx="14" fill="#eef6fa" opacity=".9"/><rect x="${cx - 36}" y="${cy - 40}" width="72" height="84" rx="10" fill="${fill}"/><rect x="${cx - 42}" y="${cy - 72}" width="84" height="16" rx="5" fill="#b7a58c"/>${label ? `<rect x="${cx - 24}" y="${cy - 8}" width="48" height="26" rx="4" fill="#fffaf0"/>` : ""}</g>`;
+  const spices = (cx, cy, r) => { const cols = ["#b5452e", "#c98a3c", "#7a5a3a", "#d9a72e", "#5e7d3a"]; let o = ""; for (let i = 0; i < 5; i++) { const a = i * 1.256 - 1.57, x = cx + Math.cos(a) * 50, y = cy + Math.sin(a) * 40; o += `<circle cx="${x}" cy="${y}" r="24" fill="#f6f1e8"/><circle cx="${x}" cy="${y}" r="19" fill="${cols[i]}"/>${dots(x, y, 14, r, 10, "#000", 1, true).replace(/fill="#000"/g, 'fill="#000" opacity=".15"')}`; } return o; };
+  const gummies = (x, y, r, col = "#d9a24a") => { let o = ""; for (let i = 0; i < 12; i++) { const cx = x + (i % 4) * 28 - 42 + r() * 6, cy = y + Math.floor(i / 4) * 28 - 28 + r() * 6; o += `<rect x="${cx - 10}" y="${cy - 10}" width="20" height="20" rx="6" fill="${col}" opacity=".9"/><rect x="${cx - 6}" y="${cy - 7}" width="6" height="4" rx="2" fill="#fff" opacity=".5"/>`; } return o; };
+  const butterLog = (x, y, herbsIn, r) => `<g ${T(x, y, 1, -12)}><rect x="-60" y="-20" width="90" height="40" rx="20" fill="${P.butter}"/>${[0, 1, 2].map(i => `<g transform="translate(${46 + i * 14} ${i * 6})"><ellipse rx="8" ry="20" fill="${P.butter}" stroke="#e6c25c"/></g>`).join("")}${herbsIn ? dots(-15, 0, 30, r, 16, P.greenD, 1.6) : ""}</g>`;
+
+  // ---------- keto garnish ----------
   const asparagus = (x, y, r) => { let o = ""; for (let i = 0; i < 5; i++) { const yy = y + i * 7, len = 60 + r() * 10; o += `<line x1="${x}" y1="${yy}" x2="${x + len}" y2="${yy - 8}" stroke="${P.green}" stroke-width="5" stroke-linecap="round"/><ellipse cx="${x + len}" cy="${yy - 8}" rx="6" ry="4" fill="${P.greenD}"/>`; } return o; };
+  const greenBeans = (x, y, r) => { let o = ""; for (let i = 0; i < 7; i++) { const yy = y + i * 5; o += `<path d="M${x},${yy} q30,${-8 + r() * 6} 56,${-4 + r() * 8}" stroke="${P.green}" stroke-width="4.5" fill="none" stroke-linecap="round"/>`; } return o; };
   const broccoli = (x, y, r) => { let o = ""; for (let i = 0; i < 4; i++) { const cx = x + (i % 2) * 20 + r() * 6, cy = y + Math.floor(i / 2) * 18; o += `<rect x="${cx - 3}" y="${cy}" width="6" height="12" fill="#9cc26a"/>`; for (let j = 0; j < 5; j++) o += `<circle cx="${cx + (r() - .5) * 14}" cy="${cy - 2 + (r() - .5) * 10}" r="6" fill="${j % 2 ? P.green : P.greenD}"/>`; } return o; };
+  const cauli = (x, y, r) => { let o = ""; for (let i = 0; i < 4; i++) { const cx = x + (i % 2) * 22, cy = y + Math.floor(i / 2) * 18; for (let j = 0; j < 5; j++) o += `<circle cx="${cx + (r() - .5) * 14}" cy="${cy + (r() - .5) * 10}" r="6.5" fill="${j % 2 ? "#f7f1dc" : "#ece2c4"}"/>`; } return o; };
+  const zoodles = (x, y, s, r, col = "#b9d47a") => { let o = ""; for (let i = 0; i < 10; i++) o += `<path d="M${x - 40 * s + r() * 10},${y - 30 * s + i * 6 * s} c${20 * s},${-14 * s} ${40 * s},${14 * s} ${70 * s},0" stroke="${col}" stroke-width="${4 * s}" fill="none" stroke-linecap="round"/>`; return o; };
+  const cauliRice = (x, y, rx, r) => blob(x, y, rx, rx * .6, 0, "#f7f3ea") + dots(x, y, rx * .8, r, 18, "#e7ddc6", 2);
   const leaves = (x, y, r, n = 5) => { let o = ""; for (let i = 0; i < n; i++) o += blob(x + (r() - .5) * 40, y + (r() - .5) * 26, 16, 9, r() * 180, i % 2 ? P.leaf : "#8fc75a"); return o; };
   const tomatoes = (x, y, r, n = 4) => { let o = ""; for (let i = 0; i < n; i++) { const cx = x + (r() - .5) * 34, cy = y + (r() - .5) * 22; o += `<circle cx="${cx}" cy="${cy}" r="7" fill="${P.tom}"/><circle cx="${cx - 2}" cy="${cy - 2}" r="2" fill="#fff" opacity=".6"/>`; } return o; };
+  const peppers = (x, y, r) => { let o = ""; const c = ["#e0452f", "#f2b632", P.green]; for (let i = 0; i < 6; i++) o += `<path d="M${x + (r() - .5) * 40},${y + (r() - .5) * 24} q10,-8 22,-2" stroke="${c[i % 3]}" stroke-width="6" fill="none" stroke-linecap="round"/>`; return o; };
   const avocado = (x, y) => { let o = ""; for (let i = 0; i < 4; i++) o += `<path d="M${x + i * 12},${y} q14,-22 30,-4 q-16,4 -30,4Z" fill="${P.avo}" stroke="${P.avoD}" stroke-width="2"/>`; return o; };
   const mushrooms = (x, y, r) => { let o = ""; for (let i = 0; i < 5; i++) { const cx = x + (r() - .5) * 46, cy = y + (r() - .5) * 26; o += `<path d="M${cx - 9},${cy} a9,7 0 0 1 18,0Z" fill="${P.mush}"/><rect x="${cx - 3}" y="${cy}" width="6" height="5" fill="#e8d8c0"/>`; } return o; };
-  const herbs = (x, y, rad, r, n = 18) => { let o = ""; for (let i = 0; i < n; i++) { const a = r() * 6.28, d = r() * rad; o += `<circle cx="${x + Math.cos(a) * d}" cy="${y + Math.sin(a) * d * .8}" r="${1.6 + r() * 1.4}" fill="${P.greenD}"/>`; } return o; };
+  const herbs = (x, y, rad, r, n = 18) => dots(x, y, rad, r, n, P.greenD, 2);
   const lemon = (x, y) => `<path d="M${x},${y} a16,16 0 0 1 30,0Z" fill="${P.lemon}" stroke="#e1b72e" stroke-width="2"/><path d="M${x + 15},${y} l-8,-10 M${x + 15},${y} l0,-13 M${x + 15},${y} l8,-10" stroke="#fbe9a3" stroke-width="1.5"/>`;
   const butterPat = (x, y) => `<rect x="${x}" y="${y}" width="16" height="12" rx="2" fill="${P.butter}" stroke="#e6c25c"/>`;
-  const salt = (x, y, rad, r) => { let o = ""; for (let i = 0; i < 10; i++) { const a = r() * 6.28, d = r() * rad; o += `<rect x="${x + Math.cos(a) * d}" y="${y + Math.sin(a) * d}" width="2.4" height="2.4" fill="#fff" opacity=".9"/>`; } return o; };
   const onions = (x, y, r) => { let o = ""; for (let i = 0; i < 4; i++) o += `<ellipse cx="${x + (r() - .5) * 40}" cy="${y + (r() - .5) * 20}" rx="10" ry="6" fill="none" stroke="#e9d9f0" stroke-width="3"/>`; return o; };
+  const cucumber = (x, y, r) => { let o = ""; for (let i = 0; i < 4; i++) { const cx = x + i * 14, cy = y + (i % 2) * 6; o += `<circle cx="${cx}" cy="${cy}" r="9" fill="#6f9a3a"/><circle cx="${cx}" cy="${cy}" r="7" fill="#dbeab0"/>`; } return o; };
   const berries = (x, y, r, kind, n = 5) => { let o = ""; for (let i = 0; i < n; i++) { const cx = x + (r() - .5) * 30, cy = y + (r() - .5) * 10; if (kind === "blue") o += `<circle cx="${cx}" cy="${cy}" r="5" fill="#3b4a8c"/><circle cx="${cx}" cy="${cy - 2}" r="1.3" fill="#9fa8d6"/>`; else if (kind === "straw") o += `<path d="M${cx - 6},${cy - 4} q6,16 12,0 q-6,-4 -12,0Z" fill="#e2384a"/><path d="M${cx - 5},${cy - 5} l5,-4 l5,4" stroke="${P.green}" stroke-width="2" fill="none"/>`; else o += `<circle cx="${cx}" cy="${cy}" r="5.5" fill="#d23b5e"/><circle cx="${cx - 2}" cy="${cy - 1}" r="1.5" fill="#f07a95"/><circle cx="${cx + 2}" cy="${cy + 1}" r="1.5" fill="#f07a95"/>`; } return o; };
+  const berryKind = g => /blueberr/.test(g) ? "blue" : /strawberr/.test(g) && !/strawberry extract/.test(g.replace(/strawberries/g, "")) && /strawberries|fresh strawberr/.test(g) ? "straw" : /raspberr|blackberr|berries/.test(g) && !/extract/.test(g.match(/(rasp|black)?berr\w* ?\w*/)?.[0] || "") ? "rasp" : null;
 
-  // ----- containers -----
+  // ---------- containers ----------
   const plate = (cx, cy, R) => `<g class="pl"><circle cx="${cx}" cy="${cy}" r="${R}" fill="${P.plate}"/><circle cx="${cx}" cy="${cy}" r="${R - 9}" fill="none" stroke="${P.rim}" stroke-width="2"/></g>`;
   const bowl = (cx, cy, R, fill) => `<g class="pl"><circle cx="${cx}" cy="${cy}" r="${R}" fill="#f6f1e8"/><circle cx="${cx}" cy="${cy}" r="${R - 8}" fill="${fill}"/></g>`;
-  function glass(cx, cy, liquid, foam, hot, r, extras) {
-    if (hot) { // mug seen from above-ish
-      return `<g class="pl"><circle cx="${cx + 52}" cy="${cy}" r="16" fill="none" stroke="#f3eee6" stroke-width="9"/><circle cx="${cx}" cy="${cy}" r="56" fill="#f3eee6"/><circle cx="${cx}" cy="${cy}" r="47" fill="${liquid}"/>${foam ? `<circle cx="${cx}" cy="${cy}" r="34" fill="${foam}"/><path d="M${cx - 16},${cy} c8,-14 24,-14 32,0 c-8,10 -24,10 -32,0Z" fill="${liquid}" opacity=".55"/>` : ""}${extras || ""}</g>`;
-    }
+  const ramekins = (cx, cy, fill, top, n = 2, extra) => { let o = ""; for (let i = 0; i < n; i++) { const x = cx + (i - (n - 1) / 2) * 76, y = cy + (i % 2) * 8; o += `<g class="pl"><circle cx="${x}" cy="${y}" r="36" fill="#f7f3ec"/><circle cx="${x}" cy="${y}" r="36" fill="none" stroke="#e6ddcf" stroke-width="3" stroke-dasharray="4 4"/><circle cx="${x}" cy="${y}" r="28" fill="${fill}"/>${top ? `<circle cx="${x}" cy="${y}" r="28" fill="${top}"/>` : ""}${extra ? extra(x, y) : ""}</g>`; } return o; };
+  function glass(cx, cy, liquid, foam, hot, extras) {
+    if (hot) return `<g class="pl"><circle cx="${cx + 52}" cy="${cy}" r="16" fill="none" stroke="#f3eee6" stroke-width="9"/><circle cx="${cx}" cy="${cy}" r="56" fill="#f3eee6"/><circle cx="${cx}" cy="${cy}" r="47" fill="${liquid}"/>${foam ? `<circle cx="${cx}" cy="${cy}" r="34" fill="${foam}"/><path d="M${cx - 16},${cy} c8,-14 24,-14 32,0 c-8,10 -24,10 -32,0Z" fill="${liquid}" opacity=".55"/>` : ""}${extras || ""}</g>`;
     return `<g class="pl"><path d="M${cx - 34},${cy - 66} L${cx + 34},${cy - 66} L${cx + 26},${cy + 70} L${cx - 26},${cy + 70}Z" fill="#eef6fa" opacity=".9"/><path d="M${cx - 31},${cy - 44} L${cx + 31},${cy - 44} L${cx + 25},${cy + 64} L${cx - 25},${cy + 64}Z" fill="${liquid}"/>${foam ? `<path d="M${cx - 31},${cy - 44} L${cx + 31},${cy - 44} L${cx + 30},${cy - 30} L${cx - 30},${cy - 30}Z" fill="${foam}"/>` : ""}<rect x="${cx + 8}" y="${cy - 90}" width="7" height="70" rx="3" fill="#e05b5b" transform="rotate(12 ${cx + 11} ${cy - 40})"/>${extras || ""}</g>`;
   }
-  function jar(cx, cy, fill, top, chia, r, topper) {
-    let o = `<g class="pl"><rect x="${cx - 30}" y="${cy - 52}" width="60" height="100" rx="12" fill="#eef6fa" opacity=".9"/><rect x="${cx - 26}" y="${cy - 30}" width="52" height="74" rx="9" fill="${fill}"/>`;
-    if (top) o += `<rect x="${cx - 26}" y="${cy - 30}" width="52" height="16" rx="8" fill="${top}"/>`;
-    if (chia) for (let i = 0; i < 45; i++) o += `<circle cx="${cx - 22 + r() * 44}" cy="${cy - 12 + r() * 52}" r="1.1" fill="#3a3330" opacity=".7"/>`;
-    return o + (topper || "") + "</g>";
+  function jars(cx, cy, fill, top, chia, r, topper) {
+    let o = "";
+    for (const dx of [-40, 40]) {
+      const x = cx + dx, y = cy + (dx > 0 ? 8 : 0);
+      o += `<g class="pl"><rect x="${x - 30}" y="${y - 52}" width="60" height="100" rx="12" fill="#eef6fa" opacity=".9"/><rect x="${x - 26}" y="${y - 30}" width="52" height="74" rx="9" fill="${fill}"/>`;
+      if (top) o += `<rect x="${x - 26}" y="${y - 30}" width="52" height="16" rx="8" fill="${top}"/>`;
+      if (chia) for (let i = 0; i < 45; i++) o += `<circle cx="${x - 22 + r() * 44}" cy="${y - 12 + r() * 52}" r="1.1" fill="#3a3330" opacity=".7"/>`;
+      o += (topper ? topper(x, y - 36) : "") + "</g>";
+    }
+    return o;
   }
 
   function flavorColor(s) {
     if (/chocolate|cocoa|mocha|fudge|brownie/.test(s)) return ["#6b4128", "#8a5a3c"];
-    if (/matcha/.test(s)) return ["#a8c47c", "#c9dca7"];
+    if (/matcha|mint|pistachio/.test(s)) return ["#a8c47c", "#c9dca7"];
     if (/strawberr|raspberr|cherry|berry|pink|valentine/.test(s)) return ["#f0a3b4", "#f7c9d3"];
     if (/blueberr/.test(s)) return ["#9a8ccf", "#c3b9e6"];
-    if (/coffee|latte|breve|espresso|cortado|cappuccino|cafe|caramel|butterscotch|maple|chai|pumpkin|cinnamon|gingerbread|snickerdoodle/.test(s)) return ["#b98a5e", "#e2c7a6"];
-    if (/turmeric|golden|eggnog|custard|egg/.test(s)) return ["#f2d27b", "#f8e7b4"];
+    if (/coffee|latte|breve|espresso|cortado|cappuccino|cafe|caramel|butterscotch|maple|chai|pumpkin|cinnamon|gingerbread|snickerdoodle|brown butter|tiramisu/.test(s)) return ["#c4955f", "#e2c7a6"];
+    if (/turmeric|golden|eggnog|custard|yolk|flan|brulee/.test(s)) return ["#f2d27b", "#f8e7b4"];
     if (/lemon/.test(s)) return ["#f7e48a", "#fbf0bd"];
-    if (/coconut|vanilla|cream|milk|horchata/.test(s)) return ["#f3e6cf", "#fbf5ea"];
-    if (/broth|tea/.test(s)) return ["#c58a4a", "#e2b98a"];
+    if (/broth|tea\b/.test(s)) return ["#c58a4a", "#e2b98a"];
     return ["#f3e6cf", "#fbf5ea"];
   }
 
+  // ---------- what kind of dish is it? ----------
+  const D = c => c === "Desserts";
+  const KINDS = [
+    ["drink", (t, g, c) => c === "Drinks"],
+    ["spice", t => /(seasoning|\brub|spice blend|spice mix|shawarma spice|everything spice|seasoning blend|salt blend|broth salt|\bblend)$/.test(t)],
+    ["fatjar", t => /^(rendered |homemade )?(beef |pork |duck |chicken )?(tallow|lard|ghee|schmaltz|duck fat|bacon grease)$/.test(t)],
+    ["gummies", t => /gumm|jello shots?|jelly shots?/.test(t)],
+    ["butterlog", t => /butter$/.test(t) && !/peanut butter$|almond butter$/.test(t)],
+    ["spread", t => false],
+    ["dip", t => /(\bdip|spread|queso|fondue|fundido|\bjam|cheese ball|whipped feta|whipped ricotta|rillettes|pate|ham salad)$/.test(t) && !/french dip/.test(t)],
+    ["sauce", (t, g, c) => !/biscuits/.test(t) && ((c === "Broths & Sauces" && !/broth|stock|consomme/.test(t)) || /(sauce|gravy|dressing|aioli|mayo|mayonnaise|crema|hollandaise|bearnaise|vinaigrette|\bjus|chimichurri|tzatziki|salsa|glaze|pesto|ranch)$/.test(t))],
+    ["broth", t => /bone broth|broth\b|stock$|consomme|pho\b/.test(t) && !/latte|cocoa|ramen|scrambled|gravy|risotto|eggs? poached/.test(t)],
+    ["charcuterie", t => /charcuterie|snack (box|pack|plate)|lunchable|board|platter|raclette|wreath/.test(t) && !/wing|kebab|slider/.test(t)],
+    ["pizza", t => /pizza/.test(t) && !/egg muffins|muffins|dip|bites|crisps|chips|pinwheels|eggs|pizzaiola|casserole|style|stuffed|omelet|waffle/.test(t)],
+    ["pancakes", t => /pancake|hotcake|blini|dutch baby|syrniki|kaiserschmarrn/.test(t) && !/bites|sticks/.test(t)],
+    ["waffle", t => /waffle|chaffle/.test(t)],
+    ["frenchtoast", t => /french toast|monte cristo|toastless toast|croque/.test(t)],
+    ["crepe", t => /crepe/.test(t)],
+    ["omelet", t => /omelet|omelette|tamagoyaki|egg wraps?|egg crepes|spanish tortilla|egg roll omelet/.test(t)],
+    ["cheesecake", (t, g, c) => D(c) && /cheesecake|ricotta pie|kasekuchen|sernik/.test(t) && !/fat bombs?|bites|mousse|cups|jars|pops|fluff|ice cream|gelato|shake|bars/.test(t)],
+    ["pudding", (t, g, c) => D(c) && /pots? de creme|creme caramel|panna cotta|custard cups|pudding|flan\b|brulee|mousse|jars|posset|jelly|zabaglione|natillas|malabi|purin|pudim|kheer|ras malai|crema catalana|bavarois|parfait|trifle|syllabub|cream pots|custard$/.test(t) && !/bread pudding$|ice cream|pops|tart|pie\b/.test(t)],
+    ["cake", (t, g, c) => D(c) && /\bcakes?\b|sponge|torte|pound|babka|tres leches|boston cream|victoria|cupcake|madeleine|twinkie|whoopie|cream horns|napoleon|eclair|cream puff|profiterole|kolach|rugelach|hamantaschen|monkey bread|danish|galaktoboureko|baklava|swirl bread|cinnamon rolls?/.test(t) && !/pancake|cheesecake|cups/.test(t)],
+    ["pie", (t, g, c) => D(c) && /\bpie\b|\btart\b|\btarts\b|galette|cobbler|crumble/.test(t)],
+    ["cookies", (t, g, c) => D(c) && /cookie|biscotti|shortbread|snickerdoodle|macaroon|macaron|florentine|lace|linzer|gingersnap|spritz|kisses|thumbprint/.test(t) && !/meringue kisses/.test(t)],
+    ["meringue", (t, g, c) => D(c) && /meringue|pavlova|marshmallow|divinity/.test(t)],
+    ["pops", (t, g, c) => D(c) && /\bpops\b|popsicle|\bbark\b|frozen .*bites|frozen whipped/.test(t)],
+    ["icecream", (t, g, c) => D(c) && /ice cream|gelato|frozen custard|sorbet|granita|semifreddo|sundae|affogato|frozen yogurt|soft serve|freeze\b/.test(t) && !/shake|float|cookie|pops|bark|sandwich/.test(t)],
+    ["fudge", (t, g, c) => D(c) && /fudge|bars\b|squares|brownie|blondie|candy|caramels\b|toffee|brittle|nougat|truffles|butter mints|\bmints\b/.test(t)],
+    ["fatbombs", (t, g, c) => (D(c) || c === "Snacks & Sides") && /fat bombs?|butter bombs?|cheesecake bites|truffles?|bonbon/.test(t) && !/wings/.test(t)],
+    ["whipped", (t, g, c) => D(c) && /whipped cream|frosting|\bwhip\b|fluff|chantilly|mascarpone cream|cream cheese whip/.test(t)],
+    ["icecream", (t, g, c) => D(c) && /sandwich/.test(t) && /ice cream|custard/.test(t)],
+    ["pudding", (t, g, c) => D(c) && /custard|cups|ricotta|yogurt|cream|jelly|gelatin/.test(t)],
+    ["rollups", (t, g, c) => /roll-ups|rollups|pinwheels|\broses\b|\brolls\b|crescents|blanket|^bresaola/.test(t) || (/wrapped/.test(t) && (c === "Snacks & Sides" || c === "Breakfast"))],
+    ["bread", t => /\bbread\b|\bloaf\b|biscuits?|bagel|\bbuns?\b|popovers?|yorkshire|naan|flatbread|crackers|focaccia|strata|stuffing|dough$/.test(t) && !/breaded|meatloaf|crumbs|pudding/.test(t)],
+    ["muffins", t => /muffin|egg bites|egg cups|ham cups|egg cups|egg puffs|frittata bites|nests|casserole cups|mini quiche|quiche cups|cheese cups/.test(t)],
+    ["deviled", t => /deviled|scotch eggs?|pickled eggs?|marinated (soft |ramen-style |)?eggs|soy eggs|jammy eggs?|boiled eggs?|ramen-style eggs|egg salad|tea eggs/.test(t)],
+    ["quiche", t => /quiche|frittata|egg pie|breakfast pie|chawanmushi|steamed eggs?|egg custard/.test(t)],
+    ["benedict", t => /benedict|hollandaise bowl/.test(t)],
+    ["scramble", t => /scramble|scrambled|egg crumbles|egg mash|cheesy egg|egg drop|shakshuka|purgatory|huevos|turkish eggs|cloud eggs|baked eggs|creamy baked|^eggs in|eggs poached|poached eggs?|migas/.test(t)],
+    ["chips", t => /chips|crisps|crackling|chicharr|cracklins|croutons|skin snacks|puffs?$|skin crackers|popcorn mix/.test(t) && !/rinds?|nachos|fish/.test(t)],
+    ["rinds", t => /pork rinds?|pork skin|trail mix|pork rind cereal/.test(t) && !/nachos|crusted|porridge|pancakes|burrito|tostadas|noodles|soup|stuffed|crumbs|pizza/.test(t)],
+    ["nachos", t => /nachos|tostadas?|chilaquiles/.test(t)],
+    ["jerky", t => /jerky|meat sticks|biltong|pemmican|beef sticks|bacon candy|bacon twists|candied bacon/.test(t)],
+    ["drumsticks", t => /drumstick|leg quarters?|\blegs?\b|lollipops/.test(t) && /chicken|turkey|duck|goose|drumstick|lollipop/.test(t)],
+    ["wings", t => /\bwings?\b|drumettes/.test(t)],
+    ["sticks", t => /sticks|fries|\bstrips\b|tenders\b|fingers|curds|corn dogs/.test(t) && !/pancake sticks|meat sticks|drumsticks/.test(t)],
+    ["cheese", t => /halloumi|brie|camembert|\bfeta\b|saganaki|provolone|paneer|queso fresco|goat cheese|cheese curds|cheese cubes|\bmozzarella\b|\bricotta\b|smoked cheese|cheese block|cheese log|burrata|labneh|cottage cheese bowl|cream cheese block/.test(t) && !/wrapped|stuffed|chicken|beef|pork|lamb|steak|burger|meatball|eggs?\b|scrambled|omelet|dip|gelato|pancakes|crisps|sticks|chips|fries|balls|bites|skillet|bake$|sausage|pizza|noodle/.test(t)],
+    ["wraps", t => /burrito|\bwraps?\b|egg rolls?|spring roll|cabbage roll|lettuce cups|sushi|hand roll|taquitos?|bao/.test(t) && !/bowl|bake|soup|casserole/.test(t)],
+    ["tacos", t => /tacos?\b|fajitas?|quesadilla|arepa|gyro|shawarma/.test(t) && !/seasoning|dip|salad|soup|casserole|skillet|bowl|meatballs?|meat$/.test(t)],
+    ["sliders", t => /sliders|mini (bacon )?cheeseburger|burger bites/.test(t)],
+    ["casserole", t => /casserole|\bbake$|bake\b|gratin|lasagna|shepherd|cottage pie|moussaka|pastitsio|pot pie|meat pie|scotch pies|strata|sheet pan|tray bake|hot ?dish|au gratin|kleftiko|hotpot|enchilada/.test(t) && !/baked (brie|feta|eggs)|cups|squares$/.test(t)],
+    ["burger", t => !/peppermint/.test(t) && /burgers?\b|patty|patties|smash|cheeseburger|hamburger steak|salisbury|kofta|kefta|frikadeller|rissole|bifteki|juicy lucy|patty melt/.test(t) && !/dip|soup|salad|bowl|skillet|meatloaf|pie|omelet/.test(t)],
+    ["meatballs", t => /meatballs?|sausage balls|polpette|albondigas|keftedes|bitterballen/.test(t) && !/soup|\bsub\b|dip/.test(t)],
+    ["skewers", t => /skewers?|kebabs?|kabobs?|kebobs?|satay|souvlaki|yakitori|shish|brochettes?|anticuchos?|spiedini/.test(t) && !/seasoning|sauce|dip|bowl/.test(t)],
+    ["salad", t => /salad|slaw|caesar|cobb|wedge/.test(t) && !/dressing|salad cups|salad spread|ham salad/.test(t)],
+    ["bowl", t => /\bbowls?\b|poke|bibimbap|porridge|grits|congee|risotto|fried rice|cauliflower rice|\bmash\b|mashed|puree|cereal/.test(t)],
+    ["noodles", t => /noodles?|ramen|pasta|spaghetti|fettuccine|carbonara|alfredo|mac and cheese|\bmac\b|macaroni|lo mein|pad thai|zoodles?|cacio|stroganoff|tetrazzini|kugel/.test(t) && !/sauce$/.test(t)],
+    ["shredded", t => /pulled|shredded|carnitas|barbacoa|birria|kalua|cochinita|ropa vieja|machaca|tinga|gyro meat|lechon|taco chicken|taco meat/.test(t) && !/lechon kawali/.test(t)],
+    ["shank", t => /shanks?|osso buco|hocks?|knuckle|oxtail|neck bones|cheeks|trotters/.test(t) && !/broth|soup/.test(t)],
+    ["soup", t => !(/thighs?|chops?|steaks?|wings|breasts?|drumsticks|\bribs\b|burgers?|meatballs?/.test(t) && !/soup|stew|chowder|curry/.test(t)) && /soup|chowder|bisque|stew|chili\b|chilli|curry|korma|masala|vindaloo|tagine|goulash|gumbo|jambalaya|ragu|ragout|pozole|menudo|borscht|cassoulet|bourguignon|braise|braised|paprikash|tikka|^butter chicken|indian butter chicken|rogan josh|adobo|feijoada|laksa|tom kha|hot pot|nihari|haleem|carne guisada|picadillo|sloppy|navarin|cawl|fricassee|blanquette|stifado|keema|chili verde|colorado|guisado|in cream$|cacciatore|coq au|daube|carbonnade|dopiaza|jalfrezi|saag|rendang|massaman|panang|green curry|red curry|mole|pepian/.test(t)],
+    ["skillet", t => /skillet|\bhash\b|stir[- ]fry|saute|one pan|one-pan|sizzling/.test(t)],
+    ["baconeggs", (t, g, c) => c === "Breakfast" && /bacon.*eggs?|eggs?.*bacon|full english|fry-up|breakfast platter/.test(t)],
+    ["eggs", (t, g, c) => /\beggs?\b/.test(t) && c === "Breakfast"],
+    ["wholebird", t => /can chicken|whole (roast |roasted |smoked |)?(chicken|turkey|duck|goose)|roast (chicken|turkey|duck|goose)|roast duck|rotisserie chicken$|spatchcock|beer can|cornish (game )?hens?|game hens?|poussin|\bquail\b|pheasant\b|squab|guinea|whole chicken/.test(t)],
+    ["ribs", t => /\bribs?\b|rib tips|short ribs?|spare|baby back|riblets|burnt ends|kalbi|galbi|asado de tira|flanken|rack of|lamb rack|crown roast|lamb rack/.test(t) && !/ribeye|rib eye|prime rib|rib roast/.test(t)],
+    ["marrow", t => /marrow/.test(t)],
+    ["belly", t => /belly|bacon slab|lechon kawali|siu yuk|samgyeopsal|lardons|bacon ends/.test(t)],
+    ["bacon", t => /\bbacon\b|pancetta|guanciale|bacon explosion/.test(t) && !/burger|dip|jam|ranch|salt|bits|chicken|cheddar|egg|bombs|ice cream|candy|chips|mayo|fat|wrapped/.test(t)],
+    ["sausage", t => /sausages?|\bbrats?\b|bratwurst|kielbasa|chorizo|andouille|hot dogs?|frankfurter|weisswurst|boudin|merguez|\blinks\b|smokies|wieners|smoked fatty/.test(t) && !/gravy|balls|dip|patties|stuffing|meatloaf|mushrooms/.test(t)],
+    ["cutlets", t => /cutlets?|schnitzel|milanese|katsu|parmigiana|\bparm\b|parmesan$|crusted|breaded|^fried chicken|southern fried|chicken fried|tonkatsu|scallopini|scaloppine|piccata|francese|nuggets|popcorn chicken|karaage|fried rabbit|cordon bleu|kiev/.test(t)],
+    ["chops", t => /chops?\b|medallions|noisettes|pork steaks?|lamb steaks?|blade steak|shoulder steaks?|ham steak|gammon steak/.test(t) && !/beef|venison|bison|elk|steak medallions/.test(t)],
+    ["breast", t => /breasts?|paillard/.test(t) && !/duck breast|lamb breast/.test(t)],
+    ["duckbreast", t => /duck breast|magret|goose breast/.test(t)],
+    ["roast", t => /roast|brisket|pastrami|corned|prime rib|tenderloin|\bloin\b|leg of|shoulder|tri-tip|london broil|\brump\b|eye of round|porchetta|\bhams?\b|gammon|roulade|rouladen|meatloaf|carving|top round|bottom round|rolled|butt\b|backstrap|french dip|picnic|tongue|sirloin tip|beef wellington|cured|bresaola|prosciutto|pernil|char siu|mojo|lechon asado|italian beef/.test(t) && !/sandwich|hash|soup|salad|stack|cups|steaks?$|chops?|cutlets?|bites|tips|cubes|medallions|thighs?|wings|drumsticks/.test(t)],
+    ["thighs", t => /thighs?|chicken|\bhens?\b|turkey|poultry|duck|goose|quail|pheasant|grouse|squab|gizzard/.test(t)],
+    ["ground", t => /^ground|minced?|crumbles|keema|larb/.test(t)],
+  ];
+  function dishKind(r, ing, cats) {
+    const full = r.t.toLowerCase().replace(/\s*\([^)]*\)/g, "").replace(/[’']/g, "").trim();
+    const t = full.split(/ with | in | over | on (?!a )| topped | served | plus /)[0].trim() || full;
+    const g = (ing || r.g).join(" ").toLowerCase(), c = cats ? cats[r.c] : "";
+    for (const [k, test] of KINDS) if (test(t, g, c, full)) return k;
+    if (c === "Desserts") return "pudding";
+    if (c === "Snacks & Sides") return "bites";
+    if (/pork|\bham\b|boar/.test(t) || c === "Pork") return "chops";
+    if (/lamb|goat|mutton|rabbit|hare/.test(t) || c === "Lamb & More" && !/venison|bison|elk|moose|antelope|beef|steak/.test(t)) return "lambchops";
+    if (c === "Poultry") return "thighs";
+    if (/egg/.test(t) || c === "Breakfast") return "eggs";
+    return "steak";
+  }
+  window.dishKind = dishKind;
   window.dishSVG = function (r, ing, style, cats) {
     const R = rng(r.i || 7), t = r.t.toLowerCase(), g = ing.join(" ").toLowerCase(), all = t + " " + g;
     const cat = cats ? cats[r.c] : "";
+    const kind = dishKind(r, ing, cats);
     const bgs = { Breakfast: "#f4e3c6", Beef: "#ead6cc", Pork: "#efd9dc", Poultry: "#f1e3c8", "Lamb & More": "#e2e6d3", "Snacks & Sides": "#e8dcec", "Broths & Sauces": "#e9ddd0", Desserts: "#f1dde4", Drinks: "#d9e9ec" };
-    let food = "", scene = "";
     const cx = 160, cy = 102;
-    const garn = () => { // keto vegetables & aromatics, from this version's ingredient list
-      let o = "";
-      if (/asparagus/.test(g)) o += asparagus(cx - 70, cy + 34, R);
-      else if (/broccoli/.test(g)) o += broccoli(cx - 66, cy + 22, R);
-      else if (/green beans|zucchini/.test(g)) o += asparagus(cx - 70, cy + 34, R);
-      if (/lettuce|leaves|spinach|greens|arugula|salad/.test(g)) o += leaves(cx + 46, cy - 40, R);
-      if (/tomato/.test(g)) o += tomatoes(cx + 48, cy + 34, R);
-      if (/avocado/.test(g)) o += avocado(cx + 26, cy + 44);
-      if (/mushroom/.test(g)) o += mushrooms(cx - 30, cy + 40, R);
-      if (/onion/.test(g) && !/powder/.test(g)) o += onions(cx + 40, cy - 34, R);
-      if (/lemon|lime/.test(g) && !/extract/.test(g)) o += lemon(cx + 52, cy + 52);
-      if (/parsley|rosemary|thyme|cilantro|chive|herb|basil|mint|dill|oregano/.test(g)) o += herbs(cx, cy, 52, R);
-      return o;
-    };
-    if (cat === "Drinks") {
-      const [liq, fo] = flavorColor(all);
-      const hot = /latte|breve|coffee|cocoa|hot|steamer|tea|mocha|cortado|cappuccino|cafe|broth|mug|toddy|warm|flip|eggnog latte/.test(t) && !/iced|shake|frappe|cold|soda|slush|frozen|milk \(|float|cream soda/.test(t);
-      let ex = "";
-      if (/strawberries/.test(g)) ex += berries(hot ? cx + 30 : cx - 26, hot ? cy - 42 : cy - 70, R, "straw", 1);
-      if (/raspberries/.test(g)) ex += berries(hot ? cx + 30 : cx - 26, hot ? cy - 42 : cy - 70, R, "rasp", 2);
-      if (/blueberries/.test(g)) ex += berries(hot ? cx + 30 : cx - 26, hot ? cy - 42 : cy - 70, R, "blue", 3);
-      if (/cinnamon|nutmeg|cocoa/.test(g) && hot) ex += salt(cx, cy, 22, R).replace(/#fff/g, "#7a4a2a");
-      if (/mint/.test(g)) ex += leaves(hot ? cx + 36 : cx + 24, hot ? cy - 40 : cy - 66, R, 2);
-      scene = glass(cx, cy, liq, fo, hot, R, ex);
-      if (hot) food += `<g stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" opacity=".75"><path d="M${cx - 18},${cy - 62} c-8,-10 8,-16 0,-28"/><path d="M${cx},${cy - 66} c-8,-10 8,-16 0,-28"/><path d="M${cx + 18},${cy - 62} c-8,-10 8,-16 0,-28"/></g>`;
-    } else if (/pudding|custard|panna cotta|pots? de creme|mousse|flan|jars?|cups/.test(t) && cat === "Desserts") {
-      const [f, top] = flavorColor(t + " " + (/chocolate|cocoa|matcha|coffee|pumpkin|lemon|coconut/.test(t) ? "" : g.replace(/raspberr\w*|strawberr\w*|blueberr\w*/g, "")));
-      const chia = /chia/.test(g);
-      let tp = "";
-      const bk = /blueberr/.test(g) ? "blue" : /strawberr/.test(g) ? "straw" : /raspberr|berr/.test(g) ? "rasp" : null;
-      const tops = x => (bk ? berries(x, cy - 38, R, bk, 4) : "") + (/pecan|walnut|almonds|sliced almond|pistachio|peanuts/.test(g.replace(/almond milk|almond extract|almond flour/g, "")) ? crumbles(x, cy - 38, .25, R, "#b07a45") : "") + (/coconut, toasted|shredded coconut/.test(g) ? crumbles(x, cy - 38, .25, R, "#f6ead2") : "");
-      scene = jar(cx - 40, cy + 4, f, top, chia, R, tops(cx - 40)) + jar(cx + 40, cy + 10, f, top, chia, R, tops(cx + 40));
-    } else if (cat === "Broths & Sauces" || (/sauce|gravy|dressing|\bdip\b|aioli|mayo|crema|butter$|jus|glaze/.test(t) && !/steak|chop|chicken|thigh|pork|beef|lamb|turkey|duck|sausage|meatball|burger|rib|egg|shrimp|venison|bison/.test(t))) {
-      const col = /chocolate/.test(all) ? "#6b4128" : /gravy|jus|demi|au jus|broth/.test(all) ? P.gravy : /curry|tikka|buffalo|chipotle|bbq|barbecue|paprika/.test(all) ? P.curry : /pesto|chimichurri|herb/.test(t) ? "#6f9a3a" : /butter/.test(t) ? P.butter : P.sauceW;
-      scene = bowl(cx, cy, 70, col) + `<path d="M${cx + 30},${cy - 30} l60,-44" stroke="#c9b9a6" stroke-width="7" stroke-linecap="round"/>` + (/parmesan|cheese/.test(g) ? salt(cx, cy, 40, R).replace(/#fff/g, "#fff6d6") : "") + (/parsley|herb|chive|cilantro|dill|basil|rosemary|thyme/.test(g) ? herbs(cx, cy, 40, R, 24) : "") + (/garlic clove|cloves garlic|garlic cloves/.test(g) ? `<ellipse cx="${cx - 98}" cy="${cy + 60}" rx="10" ry="7" fill="#f6efe2" stroke="#dccfb8"/><ellipse cx="${cx - 84}" cy="${cy + 68}" rx="9" ry="6" fill="#f6efe2" stroke="#dccfb8"/>` : "");
-    } else if (/curry|stew|chili|soup|chowder|korma|masala|butter chicken|bisque|goulash|ragu|bolognese/.test(t)) {
-      const col = /curry|masala|butter chicken|korma|chili|goulash|tikka/.test(t) ? P.curry : /chowder|cream|alfredo|white/.test(all) ? P.sauceW : P.gravy;
-      scene = bowl(cx, cy, 78, col);
-      food = (/chicken|turkey/.test(t) ? crumbles(cx, cy, .9, R, "#e8b469") : crumbles(cx, cy, .9, R, "#8a4a2b")).replace(/r="([\d.]+)"/g, (m, v) => `r="${(+v * 1.6).toFixed(1)}"`);
-      if (/cauliflower rice/.test(g)) food = blob(cx - 30, cy + 26, 26, 16, 0, "#f7f3ea") + food;
-      food += /cilantro|parsley|herb/.test(g) ? herbs(cx, cy, 50, R, 26) : "";
-      if (/cream/.test(g)) food += `<path d="M${cx - 30},${cy - 6} c20,-14 40,10 60,-4" stroke="#fff8ec" stroke-width="5" fill="none" stroke-linecap="round"/>`;
-    } else {
-      scene = plate(cx, cy, 84);
-      const sauceCol = /cream|alfredo|parmesan|garlic/.test(g) && /heavy cream/.test(g) ? P.sauceW : /gravy|broth/.test(g) ? P.gravy : null;
-      if (sauceCol) food += pool(cx, cy + 4, 52, 40, sauceCol);
-      if (/burger|patty|patties/.test(t)) { food += patty(cx - 20, cy, 1, /cheese|cheddar|american/.test(g)); if (/lettuce|leaves/.test(g)) food = leaves(cx - 18, cy + 4, R, 6) + food; }
-      else if (/bacon/.test(t) && /egg/.test(t)) { food += bacon(cx - 8, cy - 34, .8, -8) + bacon(cx - 4, cy - 18, .8, -4) + egg(cx - 30, cy + 22, .95, 10) + egg(cx + 22, cy + 18, .9, -20); }
-      else if (/egg/.test(t) && cat === "Breakfast") { food += egg(cx - 26, cy - 6, 1, 8) + egg(cx + 24, cy + 4, .95, -14); if (/sausage/.test(all)) food += sausage(cx, cy + 40, .7, 8); if (/bacon/.test(all)) food += bacon(cx, cy - 44, .7, -6); }
-      else if (/bacon/.test(t)) { food += bacon(cx, cy - 22, .95, -6) + bacon(cx, cy, .95, -2) + bacon(cx, cy + 22, .95, 3); }
-      else if (/ribeye|steak|strip|sirloin|filet|tenderloin|t-bone|porterhouse|flank|skirt|tri-tip|picanha|brisket|roast|prime rib/.test(t)) food += steak(cx - 8, cy - 4, 1.1, -8, /slice|roast|brisket|prime rib/.test(t));
-      else if (/lamb chop|lamb loin|rack/.test(t) || (/chop/.test(t) && cat === "Lamb & More")) { food += chop(cx - 26, cy - 22, .8, 20, true) + chop(cx - 4, cy + 4, .8, 15, true) + chop(cx - 30, cy + 26, .8, 30, true); }
-      else if (/chop/.test(t)) { food += chop(cx - 24, cy - 16, .95, 10, false) + chop(cx - 10, cy + 20, .95, -10, false); }
-      else if (/thigh|drumstick|leg|chicken|turkey|duck|quail|hen/.test(t)) { food += thigh(cx - 30, cy - 18, .95, -12) + thigh(cx + 14, cy - 12, .95, 18) + thigh(cx - 10, cy + 22, .95, 4); }
-      else if (/meatball/.test(t)) food += meatballs(cx, cy, 1, R);
-      else if (/sausage|brat|kielbasa|chorizo|andouille/.test(t)) food += sausage(cx, cy - 18, 1, -6) + sausage(cx, cy + 6, 1, 2) + sausage(cx, cy + 30, 1, -3);
-      else if (/ground|crumble|taco|skillet|hash|casserole/.test(t)) food += crumbles(cx, cy, 1, R, "#7d4027");
-      else food += steak(cx - 8, cy - 4, 1, -6, false);
-      if (/smother|cream|gravy/.test(t) && !sauceCol) food += `<path d="M${cx - 40},${cy} c20,-10 40,10 70,-4" stroke="${/gravy|smother/.test(t) ? P.gravy : P.sauceW}" stroke-width="9" fill="none" stroke-linecap="round" opacity=".9"/>`;
-      food += garn();
-      if (/butter/.test(g) && !/almond butter|peanut butter/.test(g) && !/egg/.test(t)) food += butterPat(cx + 2, cy - 20);
-      if (/salt/.test(g)) food += salt(cx - 10, cy - 4, 30, R);
+    let scene = "", food = "", zoom = 1.2, garnish = true;
+    const isLamb = /lamb|goat|mutton|venison|elk|bison|moose|antelope|rabbit/.test(t) || cat === "Lamb & More";
+    const isPork = /pork|ham\b|boar/.test(t) || cat === "Pork";
+    const isBird = /chicken|turkey|duck|goose|quail|hen|pheasant/.test(t) || cat === "Poultry";
+    const meatCol = isBird ? P.chick : isPork ? P.pork : isLamb ? P.lamb : P.sear;
+    const flav = () => flavorColor(t + " " + (/chocolate|cocoa|matcha|coffee|pumpkin|lemon|coconut|caramel|maple|strawberr|raspberr|blueberr/.test(t) ? "" : g.replace(/raspberr\w*|strawberr\w*|blueberr\w*|almond milk/g, "")));
+    const bk = berryKind(g);
+    const nutty = /pecans?|walnuts?|sliced almonds|almonds,|chopped almonds|pistachios?|peanuts|hazelnuts/.test(g);
+    const sweetTop = (x, y) => (bk ? berries(x, y, R, bk, 4) : "") + (nutty ? crumbles(x, y, .22, R, "#b07a45", 12) : "") + (/shredded coconut|coconut, toasted|coconut flakes/.test(g) ? crumbles(x, y, .22, R, "#f6ead2", 12) : "") + (/cinnamon/.test(g) && !bk ? dots(x, y, 12, R, 10, "#8a5a33", 1.2) : "");
+    const sauceCol = () => /curry|tikka|masala|korma|buffalo|chipotle|bbq|barbecue|paprika|vindaloo|cajun|harissa|gochujang/.test(all) ? P.curry : /marinara|tomato|ragu|bolognese|pizza sauce|salsa/.test(all) ? "#c9452f" : /pesto|chimichurri|green|herb sauce|salsa verde|tzatziki|cilantro|avocado/.test(t) ? "#7aa245" : /gravy|jus|demi|broth|red-eye|au jus|mushroom/.test(all) ? P.gravy : /chocolate|mole/.test(all) ? P.choc : /butter$|brown butter|ghee/.test(t) ? P.butter : P.sauceW;
+
+    switch (kind) {
+      case "drink": {
+        const [liq, fo] = flav();
+        const hot = /latte|breve|coffee|cocoa|hot|steamer|tea|mocha|cortado|cappuccino|cafe|broth|mug|warm|flip|toddy|sipper|po cha|chai|london fog|tom and jerry|golden milk|buttered/.test(t) && !/iced|shake|frappe|cold|soda|slush|frozen|float|cream soda|egg cream|milk \(|milkshake|lassi|ayran|doogh|chaas|kefir|horchata|water|tonic|electrolyte|shot|rompope|coquito|ponche|advocaat|banana milk|strawberry milk|chocolate milk/.test(t);
+        let ex = "";
+        const bx = hot ? cx + 30 : cx - 26, by = hot ? cy - 42 : cy - 70;
+        if (/strawberries/.test(g)) ex += berries(bx, by, R, "straw", 1);
+        if (/raspberries/.test(g)) ex += berries(bx, by, R, "rasp", 2);
+        if (/blueberries/.test(g)) ex += berries(bx, by, R, "blue", 3);
+        if (/cinnamon|nutmeg|cocoa/.test(g) && hot) ex += dots(cx, cy, 22, R, 10, "#7a4a2a", 1.2, true);
+        if (/mint|cucumber/.test(g) && !/peppermint/.test(g)) ex += leaves(hot ? cx + 36 : cx + 24, hot ? cy - 40 : cy - 66, R, 2);
+        if (/lime|lemon/.test(g) && !/extract/.test(g) && !hot) ex += `<circle cx="${cx + 30}" cy="${cy - 58}" r="13" fill="#c9e07a" stroke="#8fb23a" stroke-width="3"/>`;
+        if (/broth/.test(t) && !/cocoa|latte|chai/.test(t)) ex += dots(cx, cy, 30, R, 8, "#f7dc7b", 2.5);
+        scene = glass(cx, cy, liq, /broth|water|tonic|electrolyte|shot|pickle|sparkling/.test(t) ? null : fo, hot, ex);
+        if (hot) food += `<g stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" opacity=".75"><path d="M${cx - 18},${cy - 62} c-8,-10 8,-16 0,-28"/><path d="M${cx},${cy - 66} c-8,-10 8,-16 0,-28"/><path d="M${cx + 18},${cy - 62} c-8,-10 8,-16 0,-28"/></g>`;
+        zoom = 1.08; garnish = false; break;
+      }
+      case "spice": scene = `<g class="pl">${spices(cx, cy, R)}</g>`; garnish = false; zoom = 1.1; break;
+      case "fatjar": scene = jar(cx, cy + 6, /ghee|butter/.test(t) ? "#f2cf5c" : /bacon|duck|schmaltz/.test(t) ? "#f3dfa2" : "#f7f0de", true); garnish = false; zoom = 1.1; break;
+      case "gummies": scene = plate(cx, cy, 84); food = gummies(cx, cy, R, /broth|savory|jello shots/.test(t) ? "#c98a3c" : flav()[0]); garnish = false; break;
+      case "broth": scene = bowl(cx, cy, 80, "#c58a4a") + `<circle cx="${cx}" cy="${cy}" r="60" fill="#d9a35f" opacity=".5"/>`; food = dots(cx, cy, 50, R, 16, "#f7dc7b", 3) + (/egg|yolk/.test(all) ? `<circle cx="${cx - 18}" cy="${cy - 6}" r="12" fill="${P.yolk}"/>` : "") + (/marrow|bone/.test(t) ? marrow(cx + 96, cy + 40, .45) : ""); break;
+      case "butterlog": scene = plate(cx, cy, 84); food = butterLog(cx, cy, /herb|garlic|cowboy|chimichurri|pesto|chive|parsley|turkey/.test(all), R) + (/blue cheese/.test(t) ? dots(cx - 15, cy, 26, R, 10, "#9bb0c8", 2.2) : "") + (/bacon/.test(t) ? dots(cx - 15, cy, 26, R, 12, P.bacon, 2.2) : ""); garnish = false; break;
+      case "sauce": case "dip": {
+        const col = kind === "dip" ? (/queso|cheese|cheddar|fondue|pub|beer|pimento/.test(all) ? "#f2c14e" : /pizza|buffalo|chorizo|taco|bacon jam/.test(all) ? "#d9733f" : /feta|ricotta|ranch|dill|sour cream|cream cheese|onion/.test(all) ? "#f7f1e3" : P.sauceW) : sauceCol();
+        scene = bowl(cx, cy, 70, col) + (kind === "sauce" ? `<path d="M${cx + 30},${cy - 30} l60,-44" stroke="#c9b9a6" stroke-width="7" stroke-linecap="round"/>` : "");
+        food = (/parmesan|cheese/.test(g) && kind === "sauce" ? dots(cx, cy, 40, R, 10, "#fff6d6", 2, true) : "") + (/parsley|herb|chive|cilantro|dill|basil|rosemary|thyme|green onion|scallion/.test(g) ? herbs(cx, cy, 40, R, 24) : "") + (/bacon/.test(all) && kind === "dip" ? dots(cx, cy, 36, R, 14, P.bacon, 2.6) : "") + (/pepper|paprika|cayenne|chili/.test(g) ? dots(cx, cy, 30, R, 8, "#b5452e", 1.2) : "");
+        if (kind === "dip") food += /pork rind|rinds/.test(g) ? rinds(cx + 96, cy + 40, .5, R) : /celery|cucumber|pepper strips|bell pepper/.test(g) ? `<g>${[0, 1, 2, 3].map(i => `<rect x="${cx + 78 + i * 10}" y="${cy - 70 + i * 6}" width="8" height="64" rx="4" fill="${i % 2 ? "#9cc26a" : "#e0452f"}" transform="rotate(${18 + i * 6} ${cx + 82} ${cy})"/>`).join("")}</g>` : chips(cx + 96, cy + 46, .45, R);
+        garnish = false; break;
+      }
+      case "charcuterie": scene = board(cx, cy); food = salamiRounds(cx - 50, cy - 10, R, 8) + cheeseWedge(cx + 40, cy - 28, .7, 10) + cubes(cx + 50, cy + 30, .6, R, "#f3cf68").replace(/width="22" height="22"/g, 'width="16" height="16"') + `<path d="M${cx - 20},${cy + 30} q20,-24 40,0 q-20,20 -40,0Z" fill="#e3998a"/><path d="M${cx - 10},${cy + 36} q20,-24 40,0 q-20,20 -40,0Z" fill="#d88877"/>` + (/olive|pickle|grape|berr|nut|cracker/.test(g) ? `<g>${[0, 1, 2, 3, 4].map(i => `<circle cx="${cx - 86 + i * 9}" cy="${cy + 44 + (i % 2) * 6}" r="5" fill="${/olive/.test(g) ? "#556b2f" : "#b5452e"}"/>`).join("")}</g>` : ""); zoom = 1.05; garnish = false; break;
+      case "pizza": scene = `<g class="pl">${pizza(cx, cy, 1.05, R, /pepperoni|sausage|salami|meat|bacon|chorizo/.test(all) || !/margherita|cheese pizza|white/.test(t), /chicken crust/.test(all) ? "#e9c27a" : "#e7b062")}</g>`; food = (/basil|spinach|pepper|olive|mushroom|onion/.test(g) ? leaves(cx, cy, R, 4).replace(/rx="16" ry="9"/g, 'rx="8" ry="5"') + (/mushroom/.test(g) ? mushrooms(cx + 10, cy + 10, R) : "") : "") + (/egg/.test(t) ? egg(cx + 20, cy - 10, .7, 0) + egg(cx - 24, cy + 18, .7, 20) : ""); garnish = false; break;
+      case "pancakes": scene = plate(cx, cy, 84); food = pancakes(cx - 4, cy - 10, 1, /pork rind/.test(t) ? "#f0cc84" : P.cake) + (bk ? berries(cx + 54, cy + 36, R, bk, 6) : "") + (/bacon|sausage/.test(all) ? bacon(cx - 10, cy + 54, .6, -6) : ""); garnish = false; break;
+      case "waffle": scene = plate(cx, cy, 84); food = waffle(cx - 10, cy - 4, 1, 10, /cheddar|savory|chaffle/.test(all) ? "#eab64c" : "#e0a94e") + (/chicken/.test(t) ? cutlets(cx + 30, cy + 30, .6, R) : "") + (/egg/.test(t) ? egg(cx + 34, cy - 20, .7, 0) : "") + (/bacon/.test(t) ? bacon(cx + 10, cy + 50, .55, -4) : "") + (/gravy/.test(t) ? blob(cx - 10, cy - 4, 30, 22, 0, P.sauceW, 'opacity=".9"') : "") + (bk ? berries(cx + 40, cy + 30, R, bk, 6) : "") + butterPat(cx - 18, cy - 12); garnish = false; break;
+      case "frenchtoast": scene = plate(cx, cy, 84); food = toast(cx - 22, cy - 6, .9, -10) + toast(cx + 22, cy + 4, .9, 12) + (/cream cheese|stuffed/.test(t) ? `<rect x="${cx - 4}" y="${cy - 10}" width="12" height="30" rx="5" fill="#fff8ec"/>` : "") + (/ham|croque|monte/.test(t) ? `<path d="M${cx - 40},${cy - 30} q30,-12 60,0" stroke="#e3998a" stroke-width="8" fill="none"/>` : "") + (bk ? berries(cx + 50, cy + 40, R, bk, 6) : dots(cx, cy, 36, R, 12, "#8a5a33", 1.2)) + butterPat(cx - 8, cy - 26); garnish = false; break;
+      case "crepe": scene = plate(cx, cy, 84); food = crepe(cx - 18, cy + 4, .9, -10) + crepe(cx + 22, cy - 4, .85, 170) + (bk ? berries(cx + 30, cy + 40, R, bk, 5) : "") + butterPat(cx - 4, cy - 30); garnish = false; break;
+      case "bread": scene = plate(cx, cy, 84); food = /biscuit|roll|bun|popover|yorkshire|puff/.test(t) ? muffins(cx, cy, 1, R, "#e7b65a", "#c98a3c") : /cracker/.test(t) ? cookies(cx, cy, 1, R, "#efcf86") : /strata|stuffing/.test(t) ? bakingDish(cx, cy, .85, "#e6b45c", R) : loaf(cx - 6, cy, 1, -8, /everything|bagel/.test(t) ? "#d9a24a" : "#e9c67a", /cloud/.test(t) ? "#fffaf0" : "#f7e7bd") + (/everything/.test(t) ? dots(cx - 30, cy - 10, 30, R, 16, "#3a3330", 1.4) : ""); if (/gravy/.test(t)) food += blob(cx, cy, 40, 30, 0, P.sauceW, 'opacity=".85"') + dots(cx, cy, 30, R, 12, "#8a4a2b", 3); break;
+      case "muffins": { const top = /bacon|sausage|chorizo|ham|meat|pepperoni|pizza|steak|beef|turkey|lamb|buffalo/.test(all) ? P.bacon : /spinach|broccoli|chive|herb|green/.test(g) ? P.greenD : "#e9a53a"; scene = plate(cx, cy, 84); food = muffins(cx, cy, 1, R, /egg white/.test(t) ? "#fbf5e6" : /pizza/.test(t) ? "#e9b44c" : P.omelet, top) + (/bacon wrapped|bacon egg cups|ham cups|prosciutto|turkey bacon|salami/.test(t) ? `<g>${[0, 1, 2, 3].map(i => `<circle cx="${cx + (i % 2) * 52 - 26}" cy="${cy + Math.floor(i / 2) * 46 - 23}" r="20" fill="none" stroke="${/ham/.test(t) ? "#e3998a" : P.bacon}" stroke-width="5"/>`).join("")}</g>` : ""); break; }
+      case "deviled": { scene = plate(cx, cy, 84); const piped = /deviled|egg salad/.test(t); let o = ""; for (let i = 0; i < 6; i++) { const a = i * 1.05, d = i === 5 ? 0 : 44; o += halfEgg(cx + Math.cos(a) * d, cy + Math.sin(a) * d * .78, .95, R() * 40 - 20, piped); } if (/scotch/.test(t)) { o = ""; for (let i = 0; i < 3; i++) o += `<g ${T(cx + (i - 1) * 46, cy + (i % 2) * 10, 1)}><circle r="24" fill="#8a4a2b"/><circle r="15" fill="${P.eggW}"/><circle r="8" fill="${P.yolk}"/></g>`; } if (/pickled/.test(t)) o = o.replace(/fill="#fffdf6"/g, 'fill="#f3c7d3"'); if (/marinated|ramen|soy|tea eggs|coconut aminos/.test(t)) o = o.replace(/fill="#fffdf6"/g, 'fill="#d9a35f"'); food = o + (/bacon|prosciutto|chorizo/.test(t) ? dots(cx, cy, 44, R, 14, P.bacon, 2.4) : "") + (/paprika|buffalo|smoked/.test(all) ? dots(cx, cy, 44, R, 14, "#c0392b", 1.2) : ""); break; }
+      case "omelet": scene = plate(cx, cy, 84); food = /wrap|crepe/.test(t) ? wraps(cx, cy, .8, P.omelet) : /rolled|tamagoyaki|japanese/.test(t) ? `<g ${T(cx, cy, 1, -8)}>${[0, 1, 2, 3].map(i => `<rect x="${-56 + i * 28}" y="-24" width="26" height="48" rx="6" fill="${P.omelet}"/><path d="M${-50 + i * 28},-14 q8,14 16,0" stroke="#e6b23c" stroke-width="2" fill="none"/>`).join("")}</g>` : omelet(cx - 4, cy + 4, 1.15, -6) + (/ham|steak|meat|western|bacon/.test(all) ? dots(cx - 4, cy - 2, 28, R, 10, P.bacon, 3) : "") + (/cheese|gruyere|cheddar|brie|swiss/.test(all) ? `<path d="M${cx - 26},${cy + 10} q10,10 20,0 q10,10 20,0" stroke="${P.cheese}" stroke-width="5" fill="none"/>` : ""); break;
+      case "quiche": scene = /frittata|tortilla|egg pie|breakfast pie|tart/.test(t) ? skillet(cx - 10, cy, 76, P.omelet) : `<g class="pl">${pie(cx, cy, 1.1, P.omelet, "#d9a24a")}</g>`; food = dots(cx - 6, cy, 50, R, 18, /spinach|broccoli|asparagus|herb|chive/.test(g) ? P.green : P.bacon, 3.2) + dots(cx - 6, cy, 46, R, 14, "#e9a53a", 3); if (/chawanmushi|steamed egg|custard/.test(t)) { scene = ramekins(cx, cy, "#f6dc8c", null, 2); food = herbs(cx, cy, 50, R, 8); } garnish = !/chawanmushi/.test(t); break;
+      case "scramble": { const sk = /skillet|shakshuka|purgatory|huevos|baked eggs|creamy baked|cloud eggs|eggs in|poached|turkish|egg drop/.test(t); scene = sk ? (/egg drop|poached in bone broth/.test(t) ? bowl(cx, cy, 80, "#d9a35f") : skillet(cx - 10, cy, 76, /shakshuka|purgatory|huevos|rancheros/.test(all) ? "#c9452f" : /turkish|yogurt/.test(all) ? "#f7f1e3" : /cream/.test(all) ? P.sauceW : "#3a3633")) : plate(cx, cy, 84); food = sk ? egg(cx - 30, cy - 10, .8, 0) + egg(cx + 10, cy + 18, .8, 30) + egg(cx + 20, cy - 26, .75, -20) : scrambled(cx, cy, 1, R) + (/chorizo|sausage|pastrami|steak|beef|ham|bacon|salami/.test(all) ? crumbles(cx + 10, cy, .7, R, /pastrami|ham|salami/.test(all) ? "#c45a4a" : "#8a3f22", 14) : "") + (/chive|herb/.test(all) ? herbs(cx, cy, 40, R, 12) : ""); break; }
+      case "benedict": scene = plate(cx, cy, 84); food = [[-32, -6], [30, 6]].map(([dx, dy]) => `<g ${T(cx + dx, cy + dy)}><circle r="30" fill="${/chaffle/.test(t) ? "#e0a94e" : /ham|pork|bacon/.test(all) ? "#d9877a" : "#7a3b22"}"/><circle r="22" fill="${P.eggW}"/><path d="M-22,-4 C-12,-18 12,-18 22,-4 C24,8 10,16 0,14 C-12,16 -24,8 -22,-4Z" fill="#f7d36a"/><circle r="3" fill="#c0392b"/></g>`).join(""); break;
+      case "baconeggs": scene = plate(cx, cy, 84); food = bacon(cx - 8, cy - 34, .8, -8) + bacon(cx - 4, cy - 18, .8, -4) + egg(cx - 30, cy + 22, .95, 10) + egg(cx + 22, cy + 18, .9, -20) + (/sausage|english|platter/.test(t) ? sausage(cx + 46, cy - 50, .45, 30) + sausage(cx + 52, cy - 36, .45, 30) : ""); break;
+      case "eggs": { scene = plate(cx, cy, 84); let o = egg(cx - 30, cy + 20, .85, 8) + egg(cx + 22, cy + 26, .8, -14); const m = /steak/.test(t) ? steak(cx - 4, cy - 30, .6, -8, true) : /chop/.test(t) ? chop(cx - 10, cy - 30, .65, 10, isLamb ? P.lamb : P.pork, isLamb ? 32 : 22) : /sausage|links|bratwurst|kielbasa/.test(t) ? sausage(cx, cy - 34, .6, -4) + sausage(cx, cy - 18, .6, 2) : /pork belly/.test(t) ? belly(cx, cy - 30, .55, 0) : /brisket|pastrami|corned|ham|spam|bologna|mortadella|carnitas|pulled|kofta|burger|patty|patties/.test(t) ? (/burger|patty|patties|kofta/.test(t) ? patty(cx, cy - 26, .6, /cheese/.test(t)) : /carnitas|pulled|corned|hash/.test(t) ? shredded(cx, cy - 28, .55, R) : slices(cx, cy - 30, .5, 4, "#b5443a", "#e3998a", 80)) : /chicken|turkey|duck/.test(t) ? thigh(cx, cy - 30, .65, 0) : /pancetta|prosciutto|salami/.test(t) ? salamiRounds(cx, cy - 30, R, 6) : ""; food = o + m; break; }
+      case "cheesecake": { const [f] = flav(); const col = /chocolate/.test(t) ? P.choc : /coffee|pumpkin|caramel|basque|burnt/.test(t) ? "#e9c28e" : /lemon/.test(t) ? "#f7e8a6" : "#f8ecd0"; scene = plate(cx, cy, 84); food = cheesecake(cx - 4, cy - 4, 1.05, col, /crustless|no crust|basque|japanese|cotton/.test(t) ? "#e9d3a6" : "#c98a3c", sweetTop(0, 10)) + (/basque|burnt/.test(t) ? `<path d="M-30,0" />` : ""); if (/basque|burnt/.test(t)) food = cheesecake(cx - 4, cy - 4, 1.05, "#f2dca6", "#5a3218", ""); food += (bk ? berries(cx + 50, cy + 44, R, bk, 5) : ""); break; }
+      case "cake": { const [f, top] = flav(); scene = plate(cx, cy, 84); const sponge = /chocolate|cocoa|whoopie|lava|brownie/.test(t) ? P.choc : /spice|gingerbread|carrot|pumpkin|coffee cake|cinnamon|monkey|babka/.test(t) ? "#d9a96a" : /lemon/.test(t) ? "#f7e48a" : P.cake; food = /cream puff|profiterole|eclair|cream horn|kolach|rugelach|hamantaschen|monkey bread|danish|whoopie|twinkie|madeleine|cupcake/.test(t) ? bites(cx, cy, 1.3, R, sponge, /monkey|rugelach|cinnamon/.test(t) ? "#8a5a33" : null) : cakeSlice(cx - 4, cy - 4, 1.05, 0, sponge, /boston|chocolate/.test(t) ? "#4e2a18" : "#fff6e4", sweetTop(0, 10)); food += bk ? berries(cx - 40, cy + 40, R, bk, 5) : ""; break; }
+      case "pie": { const [f] = flav(); scene = `<g class="pl">${pie(cx, cy, 1.1, /pecan/.test(t) ? "#8a5a33" : /pumpkin/.test(t) ? "#d9893a" : /chocolate/.test(t) ? P.choc : /lemon|custard|cream/.test(t) ? f : f)}</g>`; food = (/pecan/.test(t) ? crumbles(cx, cy, 1.2, R, "#6b4128", 24) : "") + sweetTop(cx - 20, cy - 10); break; }
+      case "cookies": scene = plate(cx, cy, 84); food = /florentine|lace/.test(t) ? chips(cx, cy, 1, R, "#e4ac4f") : /macaron/.test(t) ? bites(cx, cy, 1.2, R, flav()[1]) : cookies(cx, cy, 1, R, /chocolate|cocoa/.test(t) ? P.choc : /gingerbread|ginger|spice/.test(t) ? "#b9783a" : "#e2b15e", /chip/.test(t)); break;
+      case "meringue": scene = plate(cx, cy, 84); food = /pavlova/.test(t) ? `<circle cx="${cx}" cy="${cy}" r="56" fill="#fbf6ec" stroke="#efe5d2" stroke-width="3"/><circle cx="${cx}" cy="${cy}" r="40" fill="#fffaf0"/>` + berries(cx, cy, R, bk || "rasp", 10) : /marshmallow/.test(t) ? cubes(cx, cy, 1, R, "#fffaf2") : meringues(cx, cy, R); break;
+      case "icecream": { const [f] = flav(); scene = bowl(cx, cy, 80, "#f6f1e8"); food = scoops(cx, cy, [f, f, /chip|bacon|sundae/.test(t) ? f : f], R) + (/chip/.test(t) ? dots(cx, cy, 30, R, 14, P.choc, 2) : "") + (/bacon/.test(t) ? dots(cx, cy, 34, R, 14, P.bacon, 2.4) : "") + (/affogato|coffee/.test(t) ? blob(cx, cy + 20, 50, 16, 0, "#6b4128", 'opacity=".5"') : "") + (/sundae|fudge/.test(t) ? `<path d="M${cx - 40},${cy - 10} q20,20 40,0 q20,20 40,0" stroke="${P.choc}" stroke-width="6" fill="none"/>` : "") + sweetTop(cx, cy - 20); break; }
+      case "pops": scene = ""; food = /bark/.test(t) ? `<g class="pl">${squares(cx, cy, 1.1, "#fffaf0", flav()[0])}</g>` + sweetTop(cx, cy) : pops(cx, cy, flav()[0]); break;
+      case "fudge": scene = plate(cx, cy, 84); food = /mint|butter mints/.test(t) ? bites(cx, cy, .9, R, "#d7efd6") : /truffles/.test(t) ? bites(cx, cy, 1.1, R, P.choc, "#8a5a3c") : squares(cx, cy, 1, /chocolate|brownie|cocoa|fudge pops/.test(t) ? P.choc : /caramel|toffee|butterscotch|maple|peanut/.test(t) ? "#c98a3c" : /cheesecake/.test(t) ? "#f8ecd0" : /lemon/.test(t) ? "#f7e48a" : "#f3d9a0", /cheesecake|lemon/.test(t) ? "#c98a3c" : null) + sweetTop(cx, cy - 20); break;
+      case "fatbombs": scene = plate(cx, cy, 84); food = bites(cx, cy, 1.1, R, /chocolate|cocoa/.test(all) ? P.choc : /cheddar|bacon|savory/.test(t) ? "#f2c14e" : /creamsicle|orange/.test(t) ? "#f6b26b" : /strawberr|raspberr/.test(all) ? "#f0a3b4" : "#f8ecd0", /cinnamon/.test(all) ? "#8a5a33" : /bacon/.test(all) ? P.bacon : null); break;
+      case "whipped": scene = whippedBowl(cx, cy, /chocolate|cocoa/.test(all) ? "#a5765a" : /brown butter|maple|caramel/.test(all) ? "#f1dcb4" : "#fffaf0"); food = sweetTop(cx, cy - 10); break;
+      case "pudding": { const [f, top] = flav(); const chia = /chia/.test(g); const tp = (x, y) => sweetTop(x, y); if (/jars|overnight|parfait|trifle|cups|pots|posset|mousse|tiramisu|panna|jelly|gelatin|malabi|syllabub|zabaglione/.test(t) || chia) scene = jars(cx, cy + 4, f, top, chia, R, tp); else scene = ramekins(cx, cy, f, /brulee|crema catalana|creme caramel|flan|purin|pudim/.test(t) ? "#d9a24a" : null, 2, (x, y) => tp(x, y) + (/nutmeg|cinnamon/.test(g) ? dots(x, y, 16, R, 8, "#8a5a33", 1.1) : "")); garnish = false; zoom = 1.15; break; }
+      case "chips": scene = plate(cx, cy, 84); food = /pepperoni|salami/.test(t) ? salamiRounds(cx, cy, R, 14, "#b8352a") : /prosciutto|bacon chips|pork belly chips/.test(t) ? chips(cx, cy, 1, R, "#c85a4a") : /chicken skin|duck skin|crackling|chicharr|cracklins|pork skin/.test(t) ? chips(cx, cy, 1, R, "#d9a24a") : /croutons/.test(t) ? cubes(cx, cy, .9, R, "#d9a24a") : /egg|cottage/.test(t) ? chips(cx, cy, 1, R, "#f5d47a") : /beef|jerky/.test(t) ? chips(cx, cy, 1, R, "#6e3420") : chips(cx, cy, 1, R, /parmesan|cheese|cheddar|gouda|swiss|jack|crisps|crackers/.test(t) ? "#efc35a" : "#efc35a", /jalapeno/.test(t) ? P.green : /pepperoni/.test(t) ? "#b8352a" : null); garnish = false; break;
+      case "rinds": scene = bowl(cx, cy, 80, "#f6f1e8"); food = rinds(cx, cy, 1, R) + (/cinnamon/.test(t) ? dots(cx, cy, 44, R, 20, "#8a5a33", 1.2) : /buffalo|chili|spicy|bbq/.test(t) ? dots(cx, cy, 44, R, 20, "#c0392b", 1.2) : /everything/.test(t) ? dots(cx, cy, 44, R, 20, "#3a3330", 1.2) : ""); garnish = false; break;
+      case "nachos": scene = plate(cx, cy, 84); food = (/pork rind|chicharr/.test(all) ? rinds(cx, cy, 1, R) : chips(cx, cy, 1, R, "#efc35a")) + `<path d="M${cx - 40},${cy - 10} q20,16 40,0 q20,16 40,0" stroke="${P.cheese}" stroke-width="8" fill="none" stroke-linecap="round"/>` + crumbles(cx, cy, .6, R, /chicken/.test(all) ? "#e8b469" : "#7d4027", 14); break;
+      case "jerky": scene = board(cx, cy); food = /bacon candy|bacon twists/.test(t) ? bacon(cx, cy - 20, .9, -4) + bacon(cx, cy + 10, .9, 2) : /sticks/.test(t) ? sticks(cx, cy + 10, 1, R, "#6e2f1c") : jerky(cx, cy, 1, R); garnish = false; zoom = 1.05; break;
+      case "sticks": { scene = plate(cx, cy, 84); const col = /halloumi|provolone|paneer/.test(t) ? "#f0cf7a" : /chicken|tenders|strips|fingers/.test(t) ? "#d9a04c" : /corn dog/.test(t) ? "#d9a24a" : "#e9b44c"; food = sticks(cx, cy + 4, 1, R, col); food += bowl(cx + 70, cy + 50, 20, /marinara|pizza/.test(all) ? "#c9452f" : /buffalo/.test(all) ? P.curry : P.sauceW).replace('class="pl"', ""); break; }
+      case "cheese": scene = /baked|fried|saganaki|grilled|smoked/.test(t) ? skillet(cx - 10, cy, 76, "#3a3633") : board(cx, cy); food = /brie|camembert|baked brie/.test(t) ? `<circle cx="${cx - 10}" cy="${cy}" r="44" fill="#fbf3dc" stroke="#e6d8b4" stroke-width="5"/><path d="M${cx - 10},${cy} L${cx + 34},${cy - 10} A44,44 0 0 1 ${cx + 30},${cy + 18}Z" fill="#fff8d6"/>` + (bk ? berries(cx - 10, cy - 8, R, bk, 6) : "") + (nutty ? crumbles(cx - 10, cy, .5, R, "#b07a45", 12) : "") : /halloumi|paneer|provolone|saganaki|feta|queso fresco/.test(t) ? `<g ${T(cx - 10, cy, 1, -8)}>${[0, 1, 2].map(i => `<rect x="${-44 + i * 30}" y="-26" width="26" height="52" rx="4" fill="${/feta/.test(t) ? "#fbf7ee" : "#f6e2a6"}"/><line x1="${-40 + i * 30}" y1="-14" x2="${-22 + i * 30}" y2="-14" stroke="#c98a3c" stroke-width="4"/><line x1="${-40 + i * 30}" y1="6" x2="${-22 + i * 30}" y2="6" stroke="#c98a3c" stroke-width="4"/>`).join("")}</g>` : /cubes|curds/.test(t) ? cubes(cx, cy, 1, R, "#f3cf68") : /mozzarella|ricotta|burrata|goat/.test(t) ? `<circle cx="${cx - 20}" cy="${cy}" r="30" fill="#fffaf0"/><circle cx="${cx + 26}" cy="${cy + 10}" r="24" fill="#fffaf0"/>` : cheeseWedge(cx, cy, 1.3, -6); food += /honey|hot honey|pepper|chili/.test(all) ? dots(cx, cy, 40, R, 10, "#c0392b", 1.4) : ""; garnish = false; break;
+      case "rollups": { scene = plate(cx, cy, 84); const outer = /bacon/.test(t) ? P.bacon : /prosciutto|ham|bresaola|capicola|salami|pepperoni|pastrami|roast beef/.test(t) ? "#d9877a" : /turkey/.test(t) ? "#f0d4b8" : /cheese dough|crescent|blanket|pinwheels/.test(t) ? "#e9c27a" : "#d9877a"; food = /roses/.test(t) ? salamiRounds(cx, cy, R, 10, "#b8352a") : /wrapped/.test(t) ? `<g>${[0, 1, 2, 3, 4].map(i => `<g ${T(cx - 50 + i * 25, cy + (i % 2) * 14 - 7, 1, 70)}><rect x="-26" y="-9" width="52" height="18" rx="9" fill="${/jalapeno|pickle/.test(t) ? P.green : /chicken/.test(t) ? P.chick : /sausage|smokies|hot dog/.test(t) ? "#9b4a2c" : "#f6d46a"}"/><path d="M-22,-9 l8,18 M-8,-9 l8,18 M6,-9 l8,18" stroke="${P.bacon}" stroke-width="6"/></g>`).join("")}</g>` : rolls(cx, cy, 1, outer, /cream cheese|mozzarella|swiss|cheddar|cheese/.test(all) ? "#fff6e0" : "#f2c14e"); garnish = false; break; }
+      case "wraps": scene = plate(cx, cy, 84); food = /lettuce|cabbage/.test(all) ? lettuceCups(cx, cy, R, (x, y) => crumbles(x, y, .35, R, meatCol, 12)) : wraps(cx, cy, .95, /egg|omelet/.test(all) ? P.omelet : /pork rind/.test(all) ? "#f0cc84" : /cheese/.test(all) ? "#f3cf68" : "#f3e2b4"); break;
+      case "tacos": scene = plate(cx, cy, 84); food = /lettuce/.test(g) && !/cheese shell/.test(t) ? lettuceCups(cx, cy, R, (x, y) => (/fish/.test(t) ? "" : crumbles(x, y, .35, R, /chicken|turkey|pollo|tinga/.test(all) ? "#e8b469" : "#7d4027", 12)) + tomatoes(x, y, R, 1)) : tacos(cx, cy, R, /cheese/.test(t + g) ? "#efc35a" : /egg/.test(all) ? P.omelet : "#efc35a", (x, y) => crumbles(x, y - 2, .3, R, /chicken|turkey|pollo|tinga|al pastor/.test(all) ? "#e8b469" : "#7d4027", 10) + (/cilantro|onion|tomato|salsa|avocado/.test(g) ? dots(x, y - 2, 12, R, 5, P.green, 2) : "")); break;
+      case "sliders": scene = plate(cx, cy, 84); food = sliders(cx, cy, 1, R); break;
+      case "burger": scene = plate(cx, cy, 84); food = (/lettuce|leaves/.test(g) ? leaves(cx - 18, cy + 4, R, 6) : "") + patty(cx - 18, cy, 1, /cheese|cheddar|american|swiss|jack/.test(all)) + (/egg/.test(t) ? egg(cx - 18, cy - 4, .7, 0) : "") + (/bacon/.test(all) ? bacon(cx + 20, cy + 44, .5, -4) : "") + (/onion/.test(g) && !/powder/.test(g) ? onions(cx - 18, cy - 4, R) : "") + (/gravy|salisbury|smothered|mushroom/.test(all) ? blob(cx - 18, cy + 4, 34, 22, 0, P.gravy, 'opacity=".85"') + (/mushroom/.test(g) ? mushrooms(cx - 18, cy, R) : "") : ""); if (/kofta|kefta/.test(t)) food = skewers(cx, cy, .95, -8, "#7d4027"); break;
+      case "meatballs": { const s = sauceCol(); scene = /soup/.test(t) ? bowl(cx, cy, 80, P.gravy) : plate(cx, cy, 84); food = (s !== P.sauceW || /cream|swedish|gravy|alfredo/.test(all) ? blob(cx, cy, 52, 40, 0, s) : "") + meatballs(cx, cy, 1.05, R, /chicken|turkey/.test(t) ? "#d9a96a" : /lamb/.test(t) ? "#8a4a2b" : "#7d4027") + (/sausage balls|cheese/.test(t) ? dots(cx, cy, 40, R, 14, P.cheese, 2.4) : ""); break; }
+      case "skewers": scene = plate(cx, cy, 84); food = skewers(cx, cy, .95, -8, /chicken|turkey|yakitori|satay/.test(all) ? "#d9a04c" : /halloumi|cheese/.test(t) ? "#f0cf7a" : /lamb/.test(all) ? "#8a3f2c" : /pork|souvlaki/.test(all) ? "#c98d6a" : "#7a3b22", /pepper|onion|zucchini|mushroom|tomato/.test(g) ? (/pepper/.test(g) ? "#e0452f" : /zucchini/.test(g) ? P.green : /mushroom/.test(g) ? P.mush : "#e9d9f0") : /charcuterie|meat and cheese|cheese and salami/.test(t) ? "#f3cf68" : null); if (/lollipops/.test(t)) { food = ""; for (let i = 0; i < 5; i++) food += drumstick(cx - 30 + (i % 3) * 30, cy - 20 + Math.floor(i / 3) * 40, .7, -30 + i * 15, "#c9562c"); } break;
+      case "salad": scene = bowl(cx, cy, 80, "#8fc75a"); food = leaves(cx, cy, R, 10) + leaves(cx, cy, R, 6) + (/egg/.test(t + g) ? halfEgg(cx - 30, cy + 20, .8, 0, false) + halfEgg(cx + 30, cy - 20, .8, 40, false) : "") + (/bacon/.test(all) ? dots(cx, cy, 40, R, 16, P.bacon, 3) : "") + (/chicken|turkey/.test(t) ? breast(cx + 10, cy, .55, 0) : /steak|beef/.test(t) ? slices(cx + 10, cy, .5, 4, P.sear, P.pink, 80) : "") + (/tomato/.test(g) ? tomatoes(cx + 30, cy + 30, R, 4) : "") + (/cheese|feta|parmesan|blue/.test(all) ? dots(cx, cy, 40, R, 12, "#fff6d6", 3, true) : "") + (/avocado/.test(g) ? avocado(cx - 40, cy - 20) : "") + (/cucumber/.test(g) ? cucumber(cx - 40, cy + 30, R) : ""); garnish = false; break;
+      case "noodles": { const s = sauceCol(); const keto = /zucchini|zoodle|shirataki|palmini|spaghetti squash|cabbage noodle/.test(g); scene = bowl(cx, cy, 80, s === P.sauceW ? "#f6ecd4" : s); food = zoodles(cx, cy, 1, R, keto ? "#b9d47a" : "#f3d97a") + zoodles(cx, cy + 20, 1, R, keto ? "#a5c463" : "#efd06a") + (/ramen/.test(t) ? halfEgg(cx + 30, cy - 20, .9, 20, false) + slices(cx - 30, cy - 10, .4, 3, "#c98d6a", "#f3dcc4", 80) : "") + (/bacon|pancetta|carbonara|guanciale/.test(all) ? dots(cx, cy, 40, R, 14, P.bacon, 3) : "") + (/chicken/.test(t) ? crumbles(cx, cy, .6, R, "#e8b469", 10) : /beef|bolognese|stroganoff|meat/.test(t) ? crumbles(cx, cy, .6, R, "#7d4027", 14) : "") + (/parmesan|pecorino|cheese|alfredo|cacio/.test(all) ? dots(cx, cy, 40, R, 18, "#fff6d6", 2, true) : "") + (/basil|parsley|herb|green onion|scallion/.test(g) ? herbs(cx, cy, 40, R, 14) : ""); garnish = false; break; }
+      case "bowl": { scene = bowl(cx, cy, 80, /porridge|grits|congee/.test(t) ? "#f3e2b4" : "#ece3d3"); const base = /cauliflower rice|cauliflower/.test(g) ? cauliRice(cx - 22, cy + 18, 34, R) : /porridge|grits/.test(t) ? "" : /lettuce|greens|spinach/.test(g) ? leaves(cx - 22, cy + 20, R, 5) : ""; food = base + (/porridge|grits|congee|cereal/.test(t) ? "" : /pulled|carnitas|shredded|brisket|barbacoa|kalua|cochinita|lechon|pibil/.test(all) ? shredded(cx + 16, cy - 10, .8, R) : /chicken|turkey/.test(all) ? crumbles(cx + 16, cy - 10, .8, R, "#e8b469", 30) : /steak|bulgogi|philly|fajita|gyudon/.test(all) ? slices(cx + 18, cy - 12, .6, 4, P.sear, "#a85a3c", 70) : /pork belly/.test(all) ? belly(cx + 16, cy - 14, .6, 0) : crumbles(cx + 16, cy - 10, .8, R, isPork ? "#b9714a" : "#7d4027", 30)) + (/cheese|cheddar|queso|cotija/.test(all) ? dots(cx, cy, 44, R, 14, P.cheese, 2.6, true) : "") + (/tomato|salsa|pepper/.test(g) ? dots(cx, cy, 44, R, 8, "#d9452f", 3.2) : "") + (/cilantro|green onion|scallion|parsley/.test(g) ? herbs(cx, cy, 50, R, 16) : "") + (/egg/.test(all) ? egg(cx + 24, cy + 26, .6, 0) : "") + (/avocado/.test(g) ? avocado(cx - 46, cy - 20) : "") + (/bacon/.test(all) ? dots(cx, cy, 40, R, 10, P.bacon, 3) : ""); garnish = false; break; }
+      case "soup": { const s = /chowder|cream|alfredo|white|potato|cheese|broccoli cheddar|egg drop/.test(all) && !/tomato/.test(t) ? "#f1dfb6" : /curry|tikka|masala|korma|butter chicken|vindaloo|chili|goulash|paprikash|birria|tinga|pozole|adobo|tagine/.test(all) ? P.curry : /tomato|marinara|ragu/.test(all) ? "#c9452f" : /pot roast|stew|bourguignon|braise/.test(t) ? "#8a5634" : P.gravy; scene = bowl(cx, cy, 80, s); food = (isBird ? crumbles(cx, cy, .9, R, "#e8b469", 24) : isPork ? crumbles(cx, cy, .9, R, "#c98d6a", 24) : crumbles(cx, cy, .9, R, "#7a3b22", 24)).replace(/r="([\d.]+)"/g, (m, v) => `r="${(+v * 1.5).toFixed(1)}"`); if (/cauliflower rice/.test(g)) food = cauliRice(cx - 30, cy + 26, 26, R) + food; if (/broccoli/.test(g)) food += broccoli(cx + 10, cy + 10, R); if (/mushroom/.test(g)) food += mushrooms(cx, cy - 10, R); if (/celery|green beans|zucchini|spinach|kale|cabbage/.test(g)) food += dots(cx, cy, 50, R, 14, P.green, 4); if (/tomato|pepper/.test(g)) food += dots(cx, cy, 50, R, 8, "#d9452f", 3.4); food += /cilantro|parsley|herb|chive|green onion|scallion|dill/.test(g) ? herbs(cx, cy, 50, R, 26) : ""; if (/cream|sour cream|yogurt/.test(g)) food += `<path d="M${cx - 30},${cy - 6} c20,-14 40,10 60,-4" stroke="#fff8ec" stroke-width="5" fill="none" stroke-linecap="round"/>`; if (/cheddar|cheese/.test(g)) food += dots(cx, cy, 40, R, 12, P.cheese, 2.6, true); garnish = false; break; }
+      case "casserole": { const top = /moussaka|lasagna|pastitsio|enchilada|pizza|marinara/.test(all) ? "#e9b44c" : /shepherd|cottage pie|mash/.test(all) ? "#f3e2b4" : /egg|strata|breakfast/.test(all) ? P.omelet : /cheese|cheddar|mozzarella|parmesan|gratin/.test(all) ? "#efc35a" : "#d9a24a"; const sp = /pot pie|meat pie|pie\b/.test(t) ? "" : dots(cx, cy, 60, R, 14, /bacon|sausage|ham|chorizo|beef|meat/.test(all) ? P.bacon : P.greenD, 3); scene = /sheet pan|tray bake/.test(t) ? `<g class="pl"><rect x="${cx - 110}" y="${cy - 70}" width="220" height="140" rx="10" fill="#b9b4ad"/><rect x="${cx - 102}" y="${cy - 62}" width="204" height="124" rx="6" fill="#d2cdc5"/></g>` : `<g class="pl">${bakingDish(cx, cy, 1, top, R, sp)}</g>`; if (/sheet pan/.test(t)) food = (/egg/.test(t) ? egg(cx - 50, cy - 20, .7, 0) + egg(cx + 50, cy + 20, .7, 0) + egg(cx - 10, cy + 30, .7, 0) : "") + (/bacon/.test(t) ? bacon(cx + 10, cy - 34, .7, 0) : /sausage/.test(t) ? sausage(cx + 20, cy - 30, .6, 0) + sausage(cx - 40, cy + 30, .6, 10) : /steak/.test(t) ? steak(cx + 30, cy - 20, .6, 0, false) : /chicken/.test(t) ? thigh(cx - 40, cy - 30, .7, 0) + thigh(cx + 40, cy + 20, .7, 30) : crumbles(cx, cy, 1, R, meatCol, 30)); zoom = 1.05; break; }
+      case "skillet": scene = skillet(cx - 10, cy, 76, "#3a3633"); food = (/hash/.test(t) ? cubes(cx - 10, cy, .8, R, /cauliflower|radish|turnip|jicama/.test(g) ? "#f3e2b4" : "#d9a24a") : "") + crumbles(cx - 10, cy, 1, R, isBird ? "#e8b469" : /chorizo/.test(all) ? "#b8452e" : /pastrami|corned|ham/.test(all) ? "#c45a4a" : "#7d4027", 30) + (/egg/.test(t) ? egg(cx - 30, cy - 16, .7, 0) + egg(cx + 14, cy + 20, .7, 30) : "") + (/cheese|cheddar|cheesy/.test(all) ? `<path d="M${cx - 50},${cy} q20,-14 40,0 q20,14 40,0" stroke="${P.cheese}" stroke-width="7" fill="none" stroke-linecap="round"/>` : "") + (/pepper|onion/.test(g) && !/powder/.test(g) ? peppers(cx - 10, cy, R) : ""); break;
+      case "shredded": scene = plate(cx, cy, 84); food = shredded(cx - 6, cy, 1, R, isBird ? "#d9a96a" : /barbacoa|birria|beef|brisket/.test(t) ? "#7a3b22" : "#a8653d") + (/bbq|barbecue|sauce/.test(all) ? dots(cx, cy, 30, R, 8, "#8a2f14", 3) : "") + (/lettuce|slaw|cabbage/.test(g) ? leaves(cx + 50, cy + 30, R, 3) : "") + (/lime/.test(g) ? `<path d="M${cx + 50},${cy - 50} a14,14 0 0 1 26,0Z" fill="#9fcf4e" stroke="#6f9a3a" stroke-width="2"/>` : ""); break;
+      case "wings": scene = plate(cx, cy, 84); food = ""; for (let i = 0; i < 6; i++) food += wing(cx - 40 + (i % 3) * 40, cy - 18 + Math.floor(i / 3) * 40, .95, -20 + i * 25); if (/garlic parmesan|lemon pepper|salt|dry rub|plain|crispy/.test(t)) food = food.replace(/#c9562c/g, "#d9a04c"); food += bowl(cx + 72, cy + 52, 18, /ranch|blue cheese/.test(all) ? "#f7f3ea" : "#f7f3ea").replace('class="pl"', "") + (/celery/.test(g) ? `<rect x="${cx - 100}" y="${cy + 30}" width="8" height="50" rx="4" fill="#9cc26a" transform="rotate(60 ${cx - 96} ${cy + 55})"/>` : ""); garnish = !/celery/.test(g); break;
+      case "drumsticks": scene = plate(cx, cy, 84); food = drumstick(cx - 10, cy - 24, 1, -10, /duck|confit/.test(t) ? "#b97a3c" : P.chick) + drumstick(cx - 4, cy + 14, 1, 10, /duck|confit/.test(t) ? "#b97a3c" : P.chick) + (/turkey leg/.test(t) ? "" : drumstick(cx + 20, cy - 4, .9, 30, /duck|confit/.test(t) ? "#b97a3c" : P.chick)); break;
+      case "wholebird": scene = /quail|cornish|hen|poussin|squab|pheasant/.test(t) ? plate(cx, cy, 84) : `<g class="pl"><ellipse cx="${cx}" cy="${cy}" rx="120" ry="80" fill="#f6f1e8"/><ellipse cx="${cx}" cy="${cy}" rx="108" ry="68" fill="none" stroke="${P.rim}" stroke-width="2"/></g>`; food = /quail|cornish|hen|poussin|squab/.test(t) ? wholeBird(cx - 30, cy, .6, P.gold) + wholeBird(cx + 32, cy + 8, .6, P.gold) : wholeBird(cx, cy, 1, /duck|goose/.test(t) ? "#b97a3c" : /smoked/.test(t) ? "#a86a28" : P.gold); zoom = 1.12; break;
+      case "ribs": scene = board(cx, cy); food = /short ribs?|kalbi|galbi|flanken/.test(t) ? `<g>${[0, 1, 2].map(i => `<g ${T(cx - 40 + i * 40, cy + (i % 2) * 10 - 5, 1, 10)}><rect x="-16" y="-34" width="32" height="68" rx="10" fill="#5e2a18"/><rect x="-4" y="-40" width="8" height="20" rx="3" fill="${P.bone}"/></g>`).join("")}</g>` : /burnt ends/.test(t) ? cubes(cx, cy, 1.1, R, "#5e2a18") : /rack|crown|lamb/.test(t) ? `<g ${T(cx, cy, 1, -8)}>${[0, 1, 2, 3, 4, 5].map(i => `<rect x="${-60 + i * 22}" y="-40" width="8" height="34" rx="4" fill="${P.bone}"/>`).join("")}<rect x="-70" y="-12" width="140" height="46" rx="16" fill="${isLamb ? P.lamb : "#a8653d"}"/><rect x="-70" y="-12" width="140" height="10" rx="5" fill="${P.fat}" opacity=".6"/></g>` : ribs(cx, cy, 1.1, -6, /bbq|barbecue|sauce|glazed|sticky/.test(all) ? "#7a2a16" : "#8a3a22"); zoom = 1.05; break;
+      case "marrow": scene = board(cx, cy); food = marrow(cx - 10, cy, 1.1) + herbs(cx - 10, cy, 30, R, 10) + `<circle cx="${cx + 60}" cy="${cy + 20}" r="4" fill="#fff"/><circle cx="${cx + 66}" cy="${cy + 26}" r="3" fill="#fff"/>`; zoom = 1.05; break;
+      case "shank": { scene = bowl(cx, cy, 80, /cream/.test(all) ? "#f1dfb6" : P.gravy); const col = isLamb ? "#7a3b22" : isPork ? "#a8653d" : "#6e3420"; food = /oxtail|neck|cheeks/.test(t) ? cubes(cx, cy, 1, R, col) : `<g ${T(cx - 6, cy, 1, -20)}><ellipse rx="44" ry="30" fill="${col}"/><ellipse cx="-6" cy="-6" rx="30" ry="18" fill="#a85a36" opacity=".5"/><rect x="30" y="-7" width="40" height="14" rx="7" fill="${P.bone}"/><circle cx="70" cy="-6" r="8" fill="${P.bone}"/><circle cx="70" cy="6" r="8" fill="${P.bone}"/></g>`; food += /rosemary|thyme|parsley|herb/.test(g) ? herbs(cx, cy, 50, R, 16) : ""; if (/carrot|celery|onion|mushroom/.test(g)) food += dots(cx, cy, 56, R, 10, "#d9893a", 4); garnish = false; break; }
+      case "belly": scene = plate(cx, cy, 84); food = /burnt ends/.test(t) ? cubes(cx, cy, 1, R, "#5e2a18") : belly(cx - 6, cy - 4, 1.2, -4); break;
+      case "bacon": scene = plate(cx, cy, 84); food = bacon(cx, cy - 26, .95, -6) + bacon(cx, cy - 2, .95, -2) + bacon(cx, cy + 22, .95, 3); break;
+      case "sausage": scene = plate(cx, cy, 84); { const col = /chicken|turkey|weisswurst|boudin blanc|white/.test(t) ? "#d9b58a" : /chorizo|andouille|merguez|spicy|hot/.test(t) ? "#a33a22" : /hot dog|frank|wiener|smokies/.test(t) ? "#b5553a" : "#9b4a2c"; food = /smokies|little/.test(t) ? bites(cx, cy, 1, R, col) : sausage(cx, cy - 24, 1, -6, col) + sausage(cx, cy, 1, 2, col) + sausage(cx, cy + 24, 1, -3, col); if (/sauerkraut|cabbage|onion|peppers/.test(g)) food += peppers(cx + 40, cy + 40, R); food += `<circle cx="${cx - 58}" cy="${cy + 44}" r="10" fill="#e6b830"/>`; } break;
+      case "cutlets": scene = plate(cx, cy, 84); food = (/parm|parmigiana|marinara/.test(all) ? "" : "") + cutlets(cx, cy, 1.1, R) + (/parm|parmigiana|marinara/.test(all) ? blob(cx, cy, 36, 22, 0, "#c9452f", 'opacity=".9"') + dots(cx, cy, 30, R, 10, "#fff6d6", 3) : "") + (/gravy|cream/.test(all) ? blob(cx - 10, cy + 4, 30, 18, 0, P.sauceW, 'opacity=".95"') + dots(cx - 10, cy + 4, 24, R, 10, "#3a3330", 1) : "") + (/lemon|piccata/.test(all) ? lemon(cx + 40, cy + 40) : ""); break;
+      case "roast": { scene = /whole|leg of|shoulder|crown|porchetta|ham\b|prime rib|standing/.test(t) ? `<g class="pl"><ellipse cx="${cx}" cy="${cy}" rx="120" ry="80" fill="#f6f1e8"/><ellipse cx="${cx}" cy="${cy}" rx="108" ry="68" fill="none" stroke="${P.rim}" stroke-width="2"/></g>` : board(cx, cy); const outer = /ham|gammon/.test(t) ? "#c46a4a" : isPork ? "#b9714a" : isLamb ? "#7a3b22" : isBird ? P.gold : /brisket|pastrami|corned/.test(t) ? "#4e2414" : P.sear; const inner = /ham|corned|pastrami|gammon/.test(t) ? "#e3998a" : isPork ? "#f2d6c4" : isBird ? "#f7e2c0" : /brisket/.test(t) ? "#9c5a3c" : /well|pot roast|braised|slow|meatloaf/.test(all) ? "#9c5a3c" : P.pink; food = /meatloaf/.test(t) ? loaf(cx - 6, cy, 1.05, -8, "#a33a22", "#8a4a2b") : `<g ${T(cx - 44, cy - 4, 1)}><ellipse rx="40" ry="34" fill="${outer}"/><ellipse rx="34" ry="28" fill="${inner}"/></g>` + slices(cx + 30, cy + 2, .9, 4, outer, inner, -10); if (/ham/.test(t)) food += dots(cx - 44, cy - 4, 26, R, 10, "#f2d6c4", 2); break; }
+      case "chops": scene = plate(cx, cy, 84); food = chop(cx - 24, cy - 16, .95, 10, isLamb ? P.lamb : isBird ? P.chick : P.pork, isLamb ? 32 : 22) + chop(cx - 10, cy + 20, .95, -10, isLamb ? P.lamb : isBird ? P.chick : P.pork, isLamb ? 32 : 22) + (/smother|gravy|mushroom|cream|sauce/.test(all) ? `<path d="M${cx - 50},${cy} c20,-10 40,10 70,-4" stroke="${/gravy|smother|mushroom/.test(t) ? P.gravy : P.sauceW}" stroke-width="9" fill="none" stroke-linecap="round" opacity=".9"/>` : "") + (/apple|cherry|glaze/.test(all) ? "" : ""); break;
+      case "lambchops": scene = plate(cx, cy, 84); food = chop(cx - 26, cy - 22, .8, 20, P.lamb, 34) + chop(cx - 4, cy + 4, .8, 15, P.lamb, 34) + chop(cx - 30, cy + 26, .8, 30, P.lamb, 34); break;
+      case "breast": scene = plate(cx, cy, 84); food = breast(cx - 8, cy - 4, 1.15, -6) + (/cream|alfredo|parmesan|garlic|sauce|marsala|piccata/.test(all) ? blob(cx - 8, cy + 6, 50, 30, 0, sauceCol(), 'opacity=".55"') : "") + (/stuffed/.test(t) ? `<path d="M${cx - 30},${cy - 2} q30,-12 60,0" stroke="#7aa245" stroke-width="6" fill="none"/>` : ""); break;
+      case "duckbreast": scene = plate(cx, cy, 84); food = slices(cx, cy, 1, 5, "#c98a3c", "#b84a4a", -10); break;
+      case "thighs": scene = plate(cx, cy, 84); { const col = /bbq|barbecue|glazed|teriyaki|buffalo|jerk|tandoori|peri|harissa|gochujang|sticky|honey/.test(all) ? "#b9562c" : /duck|goose/.test(t) ? "#b97a3c" : P.chick; const sc = sauceCol(); food = (/sauce|cream|curry|marsala|gravy|piccata|alfredo|mushroom|braised|smothered/.test(all) && /sauce|cream|gravy|curry|braise|smother|marsala|piccata/.test(t) ? blob(cx - 4, cy + 4, 56, 40, 0, sc) : "") + (/turkey/.test(t) ? slices(cx, cy, 1, 5, "#e2b67a", "#f7e2c0", -10) : thigh(cx - 30, cy - 18, .95, -12, col) + thigh(cx + 14, cy - 12, .95, 18, col) + thigh(cx - 10, cy + 22, .95, 4, col)); } break;
+      case "ground": scene = skillet(cx - 10, cy, 76, "#3a3633"); food = crumbles(cx - 10, cy, 1, R, isBird ? "#e8b469" : isLamb ? "#8a4a2b" : "#7d4027", 40); break;
+      case "bites": scene = plate(cx, cy, 84); food = bites(cx, cy, 1.1, R, /cheese|cheddar/.test(all) ? "#f2c14e" : meatCol); break;
+      default: { // steak & other cuts
+        scene = plate(cx, cy, 84);
+        const cut = /tataki|carpaccio|slice|sliced|rare|medium/.test(t);
+        if (/bites|tips|cubes|kebab|stir|tataki|tartare/.test(t)) food = cubes(cx - 8, cy, 1.05, R, meatCol) + (/tartare/.test(t) ? `<circle cx="${cx - 8}" cy="${cy}" r="10" fill="${P.yolk}"/>` : "");
+        else if (/medallion|filet|tenderloin|mignon|chateaubriand|noisette/.test(t)) food = `<g>${[0, 1].map(i => `<g ${T(cx - 30 + i * 52, cy + (i ? 8 : -8))}><circle r="30" fill="${meatCol}"/><circle r="30" fill="none" stroke="#c8a275" stroke-width="5" stroke-dasharray="${/bacon/.test(t) ? "0" : "4 300"}"/><line x1="-18" y1="-10" x2="14" y2="16" stroke="${P.searD}" stroke-width="4" opacity=".5"/><line x1="-8" y1="-18" x2="20" y2="6" stroke="${P.searD}" stroke-width="4" opacity=".5"/></g>`).join("")}</g>`;
+        else food = steak(cx - 8, cy - 4, 1.1, -8, cut, isLamb ? "#7a3b22" : P.sear);
+        if (/sauce|cream|peppercorn|diane|chimichurri|gravy|butter|blue cheese|mushroom/.test(t)) food = blob(cx - 8, cy + 10, 56, 38, 0, /chimichurri|herb|pesto/.test(t) ? "#7aa245" : /peppercorn|diane|gravy|mushroom|jus/.test(t) ? P.gravy : P.sauceW, 'opacity=".9"') + food;
+      }
+    }
+    if (garnish && scene.includes("pl") && !/sauce|dip|drink|pudding/.test(kind)) {
+      if (/asparagus/.test(g)) food += asparagus(cx - 74, cy + 36, R);
+      else if (/broccoli|broccolini/.test(g)) food += broccoli(cx - 70, cy + 24, R);
+      else if (/green beans|haricots/.test(g)) food += greenBeans(cx - 72, cy + 34, R);
+      else if (/cauliflower rice/.test(g)) food = cauliRice(cx - 46, cy + 40, 28, R) + food;
+      else if (/cauliflower/.test(g)) food += cauli(cx - 70, cy + 28, R);
+      else if (/zucchini/.test(g)) food += cucumber(cx - 70, cy + 44, R).replace(/#dbeab0/g, "#e6efc0");
+      if (/lettuce|leaves|spinach|greens|arugula|salad|kale|spring mix|romaine/.test(g) && !/salad dressing/.test(g)) food += leaves(cx + 50, cy - 42, R);
+      if (/cherry tomato|tomatoes|tomato,|diced tomato/.test(g)) food += tomatoes(cx + 52, cy + 34, R);
+      if (/avocado/.test(g)) food += avocado(cx + 28, cy + 46);
+      if (/mushroom/.test(g) && !/mushroom/.test(t)) food += mushrooms(cx - 30, cy + 44, R);
+      if (/bell pepper|peppers/.test(g)) food += peppers(cx + 40, cy + 40, R);
+      if (/onion/.test(g) && !/onion powder|green onion/.test(g) && !/onions?\b/.test(t)) food += onions(cx + 44, cy - 36, R);
+      if (/cucumber/.test(g)) food += cucumber(cx + 30, cy + 50, R);
+      if (/lemon|lime/.test(g) && !/extract|zest$/.test(g)) food += lemon(cx + 56, cy + 52);
+      if (/parsley|rosemary|thyme|cilantro|chive|herb|basil|mint|dill|oregano|green onion|scallion|sage/.test(g)) food += herbs(cx, cy, 52, R);
+      if (/butter/.test(g) && !/almond butter|peanut butter/.test(g) && /steak|chop|roast|pancake|lamb/.test(kind)) food += butterPat(cx + 2, cy - 22);
+      if (/flaky salt|coarse salt|sea salt|salt/.test(g) && /steak|chop|roast|ribs|belly|lambchops/.test(kind)) food += dots(cx - 10, cy - 4, 30, R, 10, "#fff", 1.4, true);
     }
     const soft = style === "soft";
-    const defs = `<defs><filter id="sh${r.i}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="${soft ? 5 : 3}" stdDeviation="${soft ? 6 : 0}" flood-color="#000" flood-opacity="${soft ? .22 : .10}"/></filter><radialGradient id="lt${r.i}" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></radialGradient></defs>`;
+    const id = (r.i || 0) + kind;
+    const defs = `<defs><filter id="sh${id}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="${soft ? 5 : 3}" stdDeviation="${soft ? 6 : 0}" flood-color="#000" flood-opacity="${soft ? .22 : .10}"/></filter><radialGradient id="lt${id}" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></radialGradient></defs>`;
     let bg = `<rect x="-500" width="1320" height="200" fill="${bgs[cat] || "#eee"}"/>`;
     if (soft) { bg += `<g opacity=".18">`; for (let i = 0; i < 9; i++) bg += `<path d="M-500,${i * 24 + 4} C-300,${i * 24 - 6} -100,${i * 24 + 10} 0,${i * 24 + R() * 8} C80,${i * 24 + 10} 200,${i * 24 - 6} 320,${i * 24 + 4} C500,${i * 24 + 12} 700,${i * 24 - 4} 820,${i * 24 + 4}" stroke="#7a5a3a" stroke-width="1.2" fill="none"/>`; bg += `</g><rect x="0" y="150" width="70" height="50" fill="#fff" opacity=".35" transform="rotate(-8 0 150)"/>`; }
     else bg += `<rect x="232" y="18" width="70" height="164" rx="6" fill="#fff" opacity=".35"/>`;
-    const light = soft ? `<rect x="-500" width="1320" height="200" fill="url(#lt${r.i})"/>` : "";
-    return `<svg viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Illustration of ${r.t.replace(/"/g, "")}">${defs}${bg}<g transform="translate(160 102) scale(${cat === "Drinks" ? 1.08 : 1.2}) translate(-160 -102)"><g filter="url(#sh${r.i})">${scene}</g><g>${food}</g></g>${light}</svg>`;
+    const light = soft ? `<rect x="-500" width="1320" height="200" fill="url(#lt${id})"/>` : "";
+    return `<svg viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Illustration of ${r.t.replace(/["<>&]/g, "")}">${defs}${bg}<g transform="translate(160 102) scale(${zoom}) translate(-160 -102)"><g filter="url(#sh${id})">${scene}</g><g>${food}</g></g>${light}</svg>`;
   };
 })();
-
 /* Easy Keto Carnivore Cookbook — app
    Static single-page app: search, filters, recipe view with serving scaler, cook mode + timers,
    favorites/notes/ratings, meal planner, shopping list, "what can I make", backup. Data in recipes.js. */
