@@ -1,3 +1,180 @@
+/* Recipe picture generator: draws a top-down plated illustration from a recipe's title and ingredients.
+   dishSVG(recipe, ingredientsList, style)  style: "flat" | "soft"  → SVG string (viewBox 320x200) */
+(function () {
+  const has = (s, re) => re.test(s);
+  function rng(seed) { let x = (seed * 9301 + 49297) % 233280; return () => (x = (x * 9301 + 49297) % 233280) / 233280; }
+  const P = { // palette
+    sear: "#7a3b22", searD: "#4e2414", fat: "#e9cfa8", pink: "#c96a5f", bone: "#f4eadb",
+    chick: "#d79a45", chickD: "#a86a28", bacon: "#b5443a", baconF: "#f0d2bf", eggW: "#fffdf6", yolk: "#f6b425",
+    patty: "#5e3020", cheese: "#f2b632", sauceW: "#f1e2c4", gravy: "#9a6a3e", curry: "#e09a3c", green: "#5e9b3c",
+    greenD: "#3d7a2a", leaf: "#7cb342", tom: "#e0452f", avo: "#a8c66c", avoD: "#6f8f2f", mush: "#c7a57e", lemon: "#f4d03f",
+    butter: "#f7dc7b", plate: "#ffffff", rim: "#ece6dc"
+  };
+  // ----- shapes -----
+  const blob = (cx, cy, rx, ry, rot, fill, extra = "") => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" transform="rotate(${rot} ${cx} ${cy})" fill="${fill}" ${extra}/>`;
+  function steak(x, y, s, rot, cut) {
+    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
+    o += `<path d="M-46,-22 C-30,-36 18,-34 40,-22 C56,-12 52,18 34,28 C10,40 -30,36 -46,20 C-58,8 -56,-12 -46,-22Z" fill="${P.sear}"/>`;
+    o += `<path d="M-46,-22 C-30,-36 18,-34 40,-22 C48,-17 52,-8 52,0 C40,-14 -20,-26 -50,-8 C-52,-14 -50,-18 -46,-22Z" fill="${P.fat}" opacity=".85"/>`;
+    for (let i = -2; i <= 2; i++) o += `<line x1="${i * 16 - 10}" y1="-16" x2="${i * 16 + 6}" y2="22" stroke="${P.searD}" stroke-width="4" stroke-linecap="round" opacity=".55"/>`;
+    if (cut) o += `<path d="M20,-18 C34,-12 40,10 30,22 L18,26 C26,10 24,-6 14,-16Z" fill="${P.pink}"/>`;
+    return o + "</g>";
+  }
+  function chop(x, y, s, rot, lamb) {
+    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
+    o += `<rect x="18" y="-5" width="${lamb ? 36 : 22}" height="10" rx="5" fill="${P.bone}" stroke="#ddd0bd"/>`;
+    o += `<path d="M-30,-20 C-10,-30 20,-24 24,-6 C28,10 14,26 -6,26 C-26,26 -40,10 -38,-4 C-37,-12 -34,-17 -30,-20Z" fill="${lamb ? "#8a3f2c" : "#b97a4f"}"/>`;
+    o += `<path d="M-30,-20 C-10,-30 20,-24 24,-6 C14,-18 -14,-22 -36,-10 C-35,-15 -33,-18 -30,-20Z" fill="${P.fat}" opacity=".8"/>`;
+    o += `<line x1="-20" y1="-8" x2="-4" y2="16" stroke="${P.searD}" stroke-width="3" opacity=".45"/><line x1="-6" y1="-12" x2="10" y2="12" stroke="${P.searD}" stroke-width="3" opacity=".45"/>`;
+    return o + "</g>";
+  }
+  function thigh(x, y, s, rot) {
+    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
+    o += `<path d="M-28,-14 C-18,-28 22,-26 30,-8 C36,8 22,24 0,24 C-22,24 -36,8 -28,-14Z" fill="${P.chick}"/>`;
+    o += `<path d="M-20,-12 C-8,-20 14,-18 22,-8" stroke="#f1c47e" stroke-width="5" fill="none" stroke-linecap="round" opacity=".8"/>`;
+    o += `<circle cx="-8" cy="6" r="3" fill="${P.chickD}"/><circle cx="10" cy="10" r="2.5" fill="${P.chickD}"/><circle cx="14" cy="-4" r="2" fill="${P.chickD}"/>`;
+    return o + "</g>";
+  }
+  function bacon(x, y, s, rot) {
+    let o = `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})">`;
+    o += `<path d="M-50,0 C-38,-10 -26,10 -14,0 C-2,-10 10,10 22,0 C34,-10 44,8 52,0 L52,12 C44,20 34,2 22,12 C10,22 -2,2 -14,12 C-26,22 -38,2 -50,12Z" fill="${P.bacon}"/>`;
+    o += `<path d="M-50,5 C-38,-5 -26,15 -14,5 C-2,-5 10,15 22,5 C34,-5 44,13 52,5" stroke="${P.baconF}" stroke-width="2.5" fill="none"/>`;
+    return o + "</g>";
+  }
+  function egg(x, y, s, rot) {
+    return `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})"><path d="M-26,-6 C-24,-22 -4,-26 10,-22 C26,-18 30,-2 26,10 C22,22 4,26 -10,22 C-24,18 -28,6 -26,-6Z" fill="${P.eggW}" stroke="#efe6d3"/><circle cx="0" cy="0" r="10" fill="${P.yolk}"/><circle cx="-3" cy="-3" r="3" fill="#fff" opacity=".5"/></g>`;
+  }
+  function patty(x, y, s, cheese) {
+    let o = `<g transform="translate(${x} ${y}) scale(${s})"><circle r="34" fill="${P.patty}"/><circle r="34" fill="none" stroke="#3e1d12" stroke-width="3" stroke-dasharray="6 5" opacity=".5"/>`;
+    if (cheese) o += `<path d="M-26,-22 L24,-24 L28,14 L14,8 L6,26 L-4,10 L-18,22 L-22,4 L-30,10Z" fill="${P.cheese}" opacity=".95"/>`;
+    return o + "</g>";
+  }
+  const meatballs = (x, y, s, r) => { let o = ""; for (let i = 0; i < 5; i++) { const a = i * 1.26 + r() * .4, d = 22; o += `<circle cx="${x + Math.cos(a) * d * s}" cy="${y + Math.sin(a) * d * s}" r="${13 * s}" fill="#7d4027"/><circle cx="${x + Math.cos(a) * d * s - 4 * s}" cy="${y + Math.sin(a) * d * s - 4 * s}" r="${4 * s}" fill="#a3603d"/>`; } return o; };
+  const sausage = (x, y, s, rot) => `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})"><rect x="-40" y="-9" width="80" height="18" rx="9" fill="#9b4a2c"/><path d="M-30,-4 L30,-4" stroke="#c4744c" stroke-width="3" stroke-linecap="round"/></g>`;
+  const crumbles = (x, y, s, r, col) => { let o = ""; for (let i = 0; i < 40; i++) { const a = r() * 6.28, d = r() * 40 * s; o += `<circle cx="${x + Math.cos(a) * d}" cy="${y + Math.sin(a) * d * .8}" r="${(3 + r() * 4) * s}" fill="${col}"/>`; } return o; };
+  const pool = (x, y, rx, ry, col) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="${col}"/>`;
+  // garnish
+  const asparagus = (x, y, r) => { let o = ""; for (let i = 0; i < 5; i++) { const yy = y + i * 7, len = 60 + r() * 10; o += `<line x1="${x}" y1="${yy}" x2="${x + len}" y2="${yy - 8}" stroke="${P.green}" stroke-width="5" stroke-linecap="round"/><ellipse cx="${x + len}" cy="${yy - 8}" rx="6" ry="4" fill="${P.greenD}"/>`; } return o; };
+  const broccoli = (x, y, r) => { let o = ""; for (let i = 0; i < 4; i++) { const cx = x + (i % 2) * 20 + r() * 6, cy = y + Math.floor(i / 2) * 18; o += `<rect x="${cx - 3}" y="${cy}" width="6" height="12" fill="#9cc26a"/>`; for (let j = 0; j < 5; j++) o += `<circle cx="${cx + (r() - .5) * 14}" cy="${cy - 2 + (r() - .5) * 10}" r="6" fill="${j % 2 ? P.green : P.greenD}"/>`; } return o; };
+  const leaves = (x, y, r, n = 5) => { let o = ""; for (let i = 0; i < n; i++) o += blob(x + (r() - .5) * 40, y + (r() - .5) * 26, 16, 9, r() * 180, i % 2 ? P.leaf : "#8fc75a"); return o; };
+  const tomatoes = (x, y, r, n = 4) => { let o = ""; for (let i = 0; i < n; i++) { const cx = x + (r() - .5) * 34, cy = y + (r() - .5) * 22; o += `<circle cx="${cx}" cy="${cy}" r="7" fill="${P.tom}"/><circle cx="${cx - 2}" cy="${cy - 2}" r="2" fill="#fff" opacity=".6"/>`; } return o; };
+  const avocado = (x, y) => { let o = ""; for (let i = 0; i < 4; i++) o += `<path d="M${x + i * 12},${y} q14,-22 30,-4 q-16,4 -30,4Z" fill="${P.avo}" stroke="${P.avoD}" stroke-width="2"/>`; return o; };
+  const mushrooms = (x, y, r) => { let o = ""; for (let i = 0; i < 5; i++) { const cx = x + (r() - .5) * 46, cy = y + (r() - .5) * 26; o += `<path d="M${cx - 9},${cy} a9,7 0 0 1 18,0Z" fill="${P.mush}"/><rect x="${cx - 3}" y="${cy}" width="6" height="5" fill="#e8d8c0"/>`; } return o; };
+  const herbs = (x, y, rad, r, n = 18) => { let o = ""; for (let i = 0; i < n; i++) { const a = r() * 6.28, d = r() * rad; o += `<circle cx="${x + Math.cos(a) * d}" cy="${y + Math.sin(a) * d * .8}" r="${1.6 + r() * 1.4}" fill="${P.greenD}"/>`; } return o; };
+  const lemon = (x, y) => `<path d="M${x},${y} a16,16 0 0 1 30,0Z" fill="${P.lemon}" stroke="#e1b72e" stroke-width="2"/><path d="M${x + 15},${y} l-8,-10 M${x + 15},${y} l0,-13 M${x + 15},${y} l8,-10" stroke="#fbe9a3" stroke-width="1.5"/>`;
+  const butterPat = (x, y) => `<rect x="${x}" y="${y}" width="16" height="12" rx="2" fill="${P.butter}" stroke="#e6c25c"/>`;
+  const salt = (x, y, rad, r) => { let o = ""; for (let i = 0; i < 10; i++) { const a = r() * 6.28, d = r() * rad; o += `<rect x="${x + Math.cos(a) * d}" y="${y + Math.sin(a) * d}" width="2.4" height="2.4" fill="#fff" opacity=".9"/>`; } return o; };
+  const onions = (x, y, r) => { let o = ""; for (let i = 0; i < 4; i++) o += `<ellipse cx="${x + (r() - .5) * 40}" cy="${y + (r() - .5) * 20}" rx="10" ry="6" fill="none" stroke="#e9d9f0" stroke-width="3"/>`; return o; };
+  const berries = (x, y, r, kind, n = 5) => { let o = ""; for (let i = 0; i < n; i++) { const cx = x + (r() - .5) * 30, cy = y + (r() - .5) * 10; if (kind === "blue") o += `<circle cx="${cx}" cy="${cy}" r="5" fill="#3b4a8c"/><circle cx="${cx}" cy="${cy - 2}" r="1.3" fill="#9fa8d6"/>`; else if (kind === "straw") o += `<path d="M${cx - 6},${cy - 4} q6,16 12,0 q-6,-4 -12,0Z" fill="#e2384a"/><path d="M${cx - 5},${cy - 5} l5,-4 l5,4" stroke="${P.green}" stroke-width="2" fill="none"/>`; else o += `<circle cx="${cx}" cy="${cy}" r="5.5" fill="#d23b5e"/><circle cx="${cx - 2}" cy="${cy - 1}" r="1.5" fill="#f07a95"/><circle cx="${cx + 2}" cy="${cy + 1}" r="1.5" fill="#f07a95"/>`; } return o; };
+
+  // ----- containers -----
+  const plate = (cx, cy, R) => `<g class="pl"><circle cx="${cx}" cy="${cy}" r="${R}" fill="${P.plate}"/><circle cx="${cx}" cy="${cy}" r="${R - 9}" fill="none" stroke="${P.rim}" stroke-width="2"/></g>`;
+  const bowl = (cx, cy, R, fill) => `<g class="pl"><circle cx="${cx}" cy="${cy}" r="${R}" fill="#f6f1e8"/><circle cx="${cx}" cy="${cy}" r="${R - 8}" fill="${fill}"/></g>`;
+  function glass(cx, cy, liquid, foam, hot, r, extras) {
+    if (hot) { // mug seen from above-ish
+      return `<g class="pl"><circle cx="${cx + 52}" cy="${cy}" r="16" fill="none" stroke="#f3eee6" stroke-width="9"/><circle cx="${cx}" cy="${cy}" r="56" fill="#f3eee6"/><circle cx="${cx}" cy="${cy}" r="47" fill="${liquid}"/>${foam ? `<circle cx="${cx}" cy="${cy}" r="34" fill="${foam}"/><path d="M${cx - 16},${cy} c8,-14 24,-14 32,0 c-8,10 -24,10 -32,0Z" fill="${liquid}" opacity=".55"/>` : ""}${extras || ""}</g>`;
+    }
+    return `<g class="pl"><path d="M${cx - 34},${cy - 66} L${cx + 34},${cy - 66} L${cx + 26},${cy + 70} L${cx - 26},${cy + 70}Z" fill="#eef6fa" opacity=".9"/><path d="M${cx - 31},${cy - 44} L${cx + 31},${cy - 44} L${cx + 25},${cy + 64} L${cx - 25},${cy + 64}Z" fill="${liquid}"/>${foam ? `<path d="M${cx - 31},${cy - 44} L${cx + 31},${cy - 44} L${cx + 30},${cy - 30} L${cx - 30},${cy - 30}Z" fill="${foam}"/>` : ""}<rect x="${cx + 8}" y="${cy - 90}" width="7" height="70" rx="3" fill="#e05b5b" transform="rotate(12 ${cx + 11} ${cy - 40})"/>${extras || ""}</g>`;
+  }
+  function jar(cx, cy, fill, top, chia, r, topper) {
+    let o = `<g class="pl"><rect x="${cx - 30}" y="${cy - 52}" width="60" height="100" rx="12" fill="#eef6fa" opacity=".9"/><rect x="${cx - 26}" y="${cy - 30}" width="52" height="74" rx="9" fill="${fill}"/>`;
+    if (top) o += `<rect x="${cx - 26}" y="${cy - 30}" width="52" height="16" rx="8" fill="${top}"/>`;
+    if (chia) for (let i = 0; i < 45; i++) o += `<circle cx="${cx - 22 + r() * 44}" cy="${cy - 12 + r() * 52}" r="1.1" fill="#3a3330" opacity=".7"/>`;
+    return o + (topper || "") + "</g>";
+  }
+
+  function flavorColor(s) {
+    if (/chocolate|cocoa|mocha|fudge|brownie/.test(s)) return ["#6b4128", "#8a5a3c"];
+    if (/matcha/.test(s)) return ["#a8c47c", "#c9dca7"];
+    if (/strawberr|raspberr|cherry|berry|pink|valentine/.test(s)) return ["#f0a3b4", "#f7c9d3"];
+    if (/blueberr/.test(s)) return ["#9a8ccf", "#c3b9e6"];
+    if (/coffee|latte|breve|espresso|cortado|cappuccino|cafe|caramel|butterscotch|maple|chai|pumpkin|cinnamon|gingerbread|snickerdoodle/.test(s)) return ["#b98a5e", "#e2c7a6"];
+    if (/turmeric|golden|eggnog|custard|egg/.test(s)) return ["#f2d27b", "#f8e7b4"];
+    if (/lemon/.test(s)) return ["#f7e48a", "#fbf0bd"];
+    if (/coconut|vanilla|cream|milk|horchata/.test(s)) return ["#f3e6cf", "#fbf5ea"];
+    if (/broth|tea/.test(s)) return ["#c58a4a", "#e2b98a"];
+    return ["#f3e6cf", "#fbf5ea"];
+  }
+
+  window.dishSVG = function (r, ing, style, cats) {
+    const R = rng(r.i || 7), t = r.t.toLowerCase(), g = ing.join(" ").toLowerCase(), all = t + " " + g;
+    const cat = cats ? cats[r.c] : "";
+    const bgs = { Breakfast: "#f4e3c6", Beef: "#ead6cc", Pork: "#efd9dc", Poultry: "#f1e3c8", "Lamb & More": "#e2e6d3", "Snacks & Sides": "#e8dcec", "Broths & Sauces": "#e9ddd0", Desserts: "#f1dde4", Drinks: "#d9e9ec" };
+    let food = "", scene = "";
+    const cx = 160, cy = 102;
+    const garn = () => { // keto vegetables & aromatics, from this version's ingredient list
+      let o = "";
+      if (/asparagus/.test(g)) o += asparagus(cx - 70, cy + 34, R);
+      else if (/broccoli/.test(g)) o += broccoli(cx - 66, cy + 22, R);
+      else if (/green beans|zucchini/.test(g)) o += asparagus(cx - 70, cy + 34, R);
+      if (/lettuce|leaves|spinach|greens|arugula|salad/.test(g)) o += leaves(cx + 46, cy - 40, R);
+      if (/tomato/.test(g)) o += tomatoes(cx + 48, cy + 34, R);
+      if (/avocado/.test(g)) o += avocado(cx + 26, cy + 44);
+      if (/mushroom/.test(g)) o += mushrooms(cx - 30, cy + 40, R);
+      if (/onion/.test(g) && !/powder/.test(g)) o += onions(cx + 40, cy - 34, R);
+      if (/lemon|lime/.test(g) && !/extract/.test(g)) o += lemon(cx + 52, cy + 52);
+      if (/parsley|rosemary|thyme|cilantro|chive|herb|basil|mint|dill|oregano/.test(g)) o += herbs(cx, cy, 52, R);
+      return o;
+    };
+    if (cat === "Drinks") {
+      const [liq, fo] = flavorColor(all);
+      const hot = /latte|breve|coffee|cocoa|hot|steamer|tea|mocha|cortado|cappuccino|cafe|broth|mug|toddy|warm|flip|eggnog latte/.test(t) && !/iced|shake|frappe|cold|soda|slush|frozen|milk \(|float|cream soda/.test(t);
+      let ex = "";
+      if (/strawberries/.test(g)) ex += berries(hot ? cx + 30 : cx - 26, hot ? cy - 42 : cy - 70, R, "straw", 1);
+      if (/raspberries/.test(g)) ex += berries(hot ? cx + 30 : cx - 26, hot ? cy - 42 : cy - 70, R, "rasp", 2);
+      if (/blueberries/.test(g)) ex += berries(hot ? cx + 30 : cx - 26, hot ? cy - 42 : cy - 70, R, "blue", 3);
+      if (/cinnamon|nutmeg|cocoa/.test(g) && hot) ex += salt(cx, cy, 22, R).replace(/#fff/g, "#7a4a2a");
+      if (/mint/.test(g)) ex += leaves(hot ? cx + 36 : cx + 24, hot ? cy - 40 : cy - 66, R, 2);
+      scene = glass(cx, cy, liq, fo, hot, R, ex);
+      if (hot) food += `<g stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" opacity=".75"><path d="M${cx - 18},${cy - 62} c-8,-10 8,-16 0,-28"/><path d="M${cx},${cy - 66} c-8,-10 8,-16 0,-28"/><path d="M${cx + 18},${cy - 62} c-8,-10 8,-16 0,-28"/></g>`;
+    } else if (/pudding|custard|panna cotta|pots? de creme|mousse|flan|jars?|cups/.test(t) && cat === "Desserts") {
+      const [f, top] = flavorColor(t + " " + (/chocolate|cocoa|matcha|coffee|pumpkin|lemon|coconut/.test(t) ? "" : g.replace(/raspberr\w*|strawberr\w*|blueberr\w*/g, "")));
+      const chia = /chia/.test(g);
+      let tp = "";
+      const bk = /blueberr/.test(g) ? "blue" : /strawberr/.test(g) ? "straw" : /raspberr|berr/.test(g) ? "rasp" : null;
+      const tops = x => (bk ? berries(x, cy - 38, R, bk, 4) : "") + (/pecan|walnut|almonds|sliced almond|pistachio|peanuts/.test(g.replace(/almond milk|almond extract|almond flour/g, "")) ? crumbles(x, cy - 38, .25, R, "#b07a45") : "") + (/coconut, toasted|shredded coconut/.test(g) ? crumbles(x, cy - 38, .25, R, "#f6ead2") : "");
+      scene = jar(cx - 40, cy + 4, f, top, chia, R, tops(cx - 40)) + jar(cx + 40, cy + 10, f, top, chia, R, tops(cx + 40));
+    } else if (cat === "Broths & Sauces" || (/sauce|gravy|dressing|\bdip\b|aioli|mayo|crema|butter$|jus|glaze/.test(t) && !/steak|chop|chicken|thigh|pork|beef|lamb|turkey|duck|sausage|meatball|burger|rib|egg|shrimp|venison|bison/.test(t))) {
+      const col = /chocolate/.test(all) ? "#6b4128" : /gravy|jus|demi|au jus|broth/.test(all) ? P.gravy : /curry|tikka|buffalo|chipotle|bbq|barbecue|paprika/.test(all) ? P.curry : /pesto|chimichurri|herb/.test(t) ? "#6f9a3a" : /butter/.test(t) ? P.butter : P.sauceW;
+      scene = bowl(cx, cy, 70, col) + `<path d="M${cx + 30},${cy - 30} l60,-44" stroke="#c9b9a6" stroke-width="7" stroke-linecap="round"/>` + (/parmesan|cheese/.test(g) ? salt(cx, cy, 40, R).replace(/#fff/g, "#fff6d6") : "") + (/parsley|herb|chive|cilantro|dill|basil|rosemary|thyme/.test(g) ? herbs(cx, cy, 40, R, 24) : "") + (/garlic clove|cloves garlic|garlic cloves/.test(g) ? `<ellipse cx="${cx - 98}" cy="${cy + 60}" rx="10" ry="7" fill="#f6efe2" stroke="#dccfb8"/><ellipse cx="${cx - 84}" cy="${cy + 68}" rx="9" ry="6" fill="#f6efe2" stroke="#dccfb8"/>` : "");
+    } else if (/curry|stew|chili|soup|chowder|korma|masala|butter chicken|bisque|goulash|ragu|bolognese/.test(t)) {
+      const col = /curry|masala|butter chicken|korma|chili|goulash|tikka/.test(t) ? P.curry : /chowder|cream|alfredo|white/.test(all) ? P.sauceW : P.gravy;
+      scene = bowl(cx, cy, 78, col);
+      food = (/chicken|turkey/.test(t) ? crumbles(cx, cy, .9, R, "#e8b469") : crumbles(cx, cy, .9, R, "#8a4a2b")).replace(/r="([\d.]+)"/g, (m, v) => `r="${(+v * 1.6).toFixed(1)}"`);
+      if (/cauliflower rice/.test(g)) food = blob(cx - 30, cy + 26, 26, 16, 0, "#f7f3ea") + food;
+      food += /cilantro|parsley|herb/.test(g) ? herbs(cx, cy, 50, R, 26) : "";
+      if (/cream/.test(g)) food += `<path d="M${cx - 30},${cy - 6} c20,-14 40,10 60,-4" stroke="#fff8ec" stroke-width="5" fill="none" stroke-linecap="round"/>`;
+    } else {
+      scene = plate(cx, cy, 84);
+      const sauceCol = /cream|alfredo|parmesan|garlic/.test(g) && /heavy cream/.test(g) ? P.sauceW : /gravy|broth/.test(g) ? P.gravy : null;
+      if (sauceCol) food += pool(cx, cy + 4, 52, 40, sauceCol);
+      if (/burger|patty|patties/.test(t)) { food += patty(cx - 20, cy, 1, /cheese|cheddar|american/.test(g)); if (/lettuce|leaves/.test(g)) food = leaves(cx - 18, cy + 4, R, 6) + food; }
+      else if (/bacon/.test(t) && /egg/.test(t)) { food += bacon(cx - 8, cy - 34, .8, -8) + bacon(cx - 4, cy - 18, .8, -4) + egg(cx - 30, cy + 22, .95, 10) + egg(cx + 22, cy + 18, .9, -20); }
+      else if (/egg/.test(t) && cat === "Breakfast") { food += egg(cx - 26, cy - 6, 1, 8) + egg(cx + 24, cy + 4, .95, -14); if (/sausage/.test(all)) food += sausage(cx, cy + 40, .7, 8); if (/bacon/.test(all)) food += bacon(cx, cy - 44, .7, -6); }
+      else if (/bacon/.test(t)) { food += bacon(cx, cy - 22, .95, -6) + bacon(cx, cy, .95, -2) + bacon(cx, cy + 22, .95, 3); }
+      else if (/ribeye|steak|strip|sirloin|filet|tenderloin|t-bone|porterhouse|flank|skirt|tri-tip|picanha|brisket|roast|prime rib/.test(t)) food += steak(cx - 8, cy - 4, 1.1, -8, /slice|roast|brisket|prime rib/.test(t));
+      else if (/lamb chop|lamb loin|rack/.test(t) || (/chop/.test(t) && cat === "Lamb & More")) { food += chop(cx - 26, cy - 22, .8, 20, true) + chop(cx - 4, cy + 4, .8, 15, true) + chop(cx - 30, cy + 26, .8, 30, true); }
+      else if (/chop/.test(t)) { food += chop(cx - 24, cy - 16, .95, 10, false) + chop(cx - 10, cy + 20, .95, -10, false); }
+      else if (/thigh|drumstick|leg|chicken|turkey|duck|quail|hen/.test(t)) { food += thigh(cx - 30, cy - 18, .95, -12) + thigh(cx + 14, cy - 12, .95, 18) + thigh(cx - 10, cy + 22, .95, 4); }
+      else if (/meatball/.test(t)) food += meatballs(cx, cy, 1, R);
+      else if (/sausage|brat|kielbasa|chorizo|andouille/.test(t)) food += sausage(cx, cy - 18, 1, -6) + sausage(cx, cy + 6, 1, 2) + sausage(cx, cy + 30, 1, -3);
+      else if (/ground|crumble|taco|skillet|hash|casserole/.test(t)) food += crumbles(cx, cy, 1, R, "#7d4027");
+      else food += steak(cx - 8, cy - 4, 1, -6, false);
+      if (/smother|cream|gravy/.test(t) && !sauceCol) food += `<path d="M${cx - 40},${cy} c20,-10 40,10 70,-4" stroke="${/gravy|smother/.test(t) ? P.gravy : P.sauceW}" stroke-width="9" fill="none" stroke-linecap="round" opacity=".9"/>`;
+      food += garn();
+      if (/butter/.test(g) && !/almond butter|peanut butter/.test(g) && !/egg/.test(t)) food += butterPat(cx + 2, cy - 20);
+      if (/salt/.test(g)) food += salt(cx - 10, cy - 4, 30, R);
+    }
+    const soft = style === "soft";
+    const defs = `<defs><filter id="sh${r.i}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="${soft ? 5 : 3}" stdDeviation="${soft ? 6 : 0}" flood-color="#000" flood-opacity="${soft ? .22 : .10}"/></filter><radialGradient id="lt${r.i}" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></radialGradient></defs>`;
+    let bg = `<rect x="-500" width="1320" height="200" fill="${bgs[cat] || "#eee"}"/>`;
+    if (soft) { bg += `<g opacity=".18">`; for (let i = 0; i < 9; i++) bg += `<path d="M-500,${i * 24 + 4} C-300,${i * 24 - 6} -100,${i * 24 + 10} 0,${i * 24 + R() * 8} C80,${i * 24 + 10} 200,${i * 24 - 6} 320,${i * 24 + 4} C500,${i * 24 + 12} 700,${i * 24 - 4} 820,${i * 24 + 4}" stroke="#7a5a3a" stroke-width="1.2" fill="none"/>`; bg += `</g><rect x="0" y="150" width="70" height="50" fill="#fff" opacity=".35" transform="rotate(-8 0 150)"/>`; }
+    else bg += `<rect x="232" y="18" width="70" height="164" rx="6" fill="#fff" opacity=".35"/>`;
+    const light = soft ? `<rect x="-500" width="1320" height="200" fill="url(#lt${r.i})"/>` : "";
+    return `<svg viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Illustration of ${r.t.replace(/"/g, "")}">${defs}${bg}<g transform="translate(160 102) scale(${cat === "Drinks" ? 1.08 : 1.2}) translate(-160 -102)"><g filter="url(#sh${r.i})">${scene}</g><g>${food}</g></g>${light}</svg>`;
+  };
+})();
+
 /* Easy Keto Carnivore Cookbook — app
    Static single-page app: search, filters, recipe view with serving scaler, cook mode + timers,
    favorites/notes/ratings, meal planner, shopping list, "what can I make", backup. Data in recipes.js. */
@@ -19,7 +196,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 /* ---------- saved state (this device only) ---------- */
 const KEY = "ekc:v1";
 const DEF = () => ({ fav: {}, status: {}, timers: [], notes: {}, rating: {}, made: {}, eat: {}, mine: {}, recent: [], plan: {}, list: [], pantry: [],
-  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null, doneness: {}, diet: "carn" });
+  pantryFats: true, goals: { kcal: 2000, p: 150, f: 140, c: 20 }, people: 1, theme: null, doneness: {}, diet: "carn", pics: true, picStyle: "soft" });
 let S;
 try { S = Object.assign(DEF(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) { S = DEF(); }
 let saveT;
@@ -45,6 +222,15 @@ R.forEach(indexRecipe);
    Book recipes are carnivore. r.kt holds the keto version: either hand-written (h:1, full g/d)
    or automatic changes (r: replaced lines, a: added ingredients, s: [position, step] inserts). */
 const isKeto = () => !!(S && S.diet === "keto");
+/* ---------- recipe pictures: drawn from each recipe's own ingredients (pic generator at top of file) ---------- */
+const PIC = new Map();
+function picOf(r) {
+  const key = r.i + "|" + (S.picStyle || "soft") + "|" + r.g.length + "|" + (r.g[r.g.length - 1] || "") + "|" + r.t;
+  let v = PIC.get(key);
+  if (!v) { try { v = window.dishSVG(r, r.g, S.picStyle || "soft", M.cats); } catch (e) { v = ""; } PIC.set(key, v); }
+  return v;
+}
+const picsOn = () => S.pics !== false;
 function applyDiet() {
   const keto = isKeto();
   for (const r of R) {
@@ -244,7 +430,7 @@ function statusPill(id) {
 function card(r, pq) {
   const sn = snippet(r, pq);
   return `<a class="card" href="#/r/${r.i}">
-    <div class="band" style="background:${color(r)}"></div>
+    ${picsOn() ? `<span class="pic" aria-hidden="true">${picOf(r)}</span>` : `<div class="band" style="background:${color(r)}"></div>`}
     <div class="body">
       <div class="cat" style="color:${color(r)}">${esc(M.cats[r.c])} · #${r.i}</div>
       <h3>${hl(r.t, pq)}</h3>
@@ -607,7 +793,8 @@ function viewRecipe(id) {
       <a class="btn sm" href="#/" id="backBtn">← Back</a>
       <span>${prev ? `<a class="btn sm" href="#/r/${prev.i}" title="${esc(prev.t)}">‹ Prev</a>` : ""} ${next ? `<a class="btn sm" href="#/r/${next.i}" title="${esc(next.t)}">Next ›</a>` : ""}</span>
     </div>
-    <div class="r-head" style="background:${c}">
+    ${picsOn() ? `<div class="r-hero no-print" aria-hidden="true">${picOf(r).replace("xMidYMid slice", "xMidYMid meet")}</div>` : ""}
+    <div class="r-head${picsOn() ? " has-pic" : ""}" style="background:${c}">
       <div class="kicker">${esc(M.cats[r.c])} · ${r.mine ? "✍️ My own recipe" : "Recipe " + r.i}${r.b ? " · Budget pick" : ""}</div>
       <h1>${esc(r.t)}</h1>
     </div>
@@ -1390,7 +1577,7 @@ function flattenState() {
     for (const k in obj) f[pre + ":" + k] = obj[k];
   for (const d in S.plan) for (const sl in S.plan[d]) if ((S.plan[d][sl] || []).length) f["plan:" + d + ":" + sl] = S.plan[d][sl];
   for (const it of S.list) f["list:" + it.key] = it;
-  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent; f.doneness = S.doneness || {}; f.diet = S.diet || "carn";
+  f.pantry = S.pantry; f.pantryFats = S.pantryFats; f.goals = S.goals; f.people = S.people; f.recent = S.recent; f.doneness = S.doneness || {}; f.diet = S.diet || "carn"; f.pics = S.pics !== false; f.picStyle = S.picStyle || "soft";
   return f;
 }
 function applyFlat(f) {
@@ -1407,7 +1594,7 @@ function applyFlat(f) {
   Object.assign(S, { fav, status, notes, rating, made, eat, mine, plan, list });
   loadMine();
   const dietWas = S.diet;
-  for (const k of ["pantry", "pantryFats", "goals", "people", "recent", "doneness", "diet"]) if (k in f) S[k] = f[k];
+  for (const k of ["pantry", "pantryFats", "goals", "people", "recent", "doneness", "diet", "pics", "picStyle"]) if (k in f) S[k] = f[k];
   if (S.diet !== dietWas) applyDiet();
 }
 let syncBusy = false, syncAgain = false, syncT = null, syncPoll = null;
@@ -1704,6 +1891,7 @@ function viewSettings() {
     <div class="box"><h3>Daily goals (used by the meal planner)</h3>
       <div class="goals">${[["kcal", "Calories"], ["p", "Protein (g)"], ["f", "Fat (g)"], ["c", "Net carbs (g)"]].map(([k, l]) => `<label>${l}<input class="inp" type="number" min="0" data-goal="${k}" value="${g[k]}"></label>`).join("")}</div></div>
     <div class="box"><h3>Recipe style</h3><p style="margin-top:0">Carnivore shows the book's recipes exactly as written. Keto adds onion, garlic, herbs, vegetable sides, and berries on desserts, and includes the optional plant items. Nutrition, shopping lists, and the meal planner follow your choice.</p>${dietSwitch()}</div>
+    <div class="box"><h3>Recipe pictures</h3><p style="margin-top:0">Each recipe gets an illustration drawn from its ingredients. In Keto mode the vegetables, berries, and herbs show up too.</p><div class="chips">${[["on", "Show pictures"], ["off", "Hide pictures"]].map(([v, t]) => `<button class="chip ${(picsOn() ? "on" : "off") === v ? "on" : ""}" data-pics="${v}">${t}</button>`).join("")}</div><div class="chips" style="margin-top:8px">${[["soft", "Soft style"], ["flat", "Flat style"]].map(([v, t]) => `<button class="chip ${(S.picStyle || "soft") === v ? "on" : ""}" data-picstyle="${v}">${t}</button>`).join("")}</div></div>
     <div class="box"><a class="sister" href="#/guide"><span class="ic">🌡️</span><span><b>Before you start</b><br><span class="muted" style="font-size:13px">Safe cooking temperatures, raw egg safety, pantry staples, and tips.</span></span></a></div>
     <div class="box"><a class="sister" href="https://k1llah03z.github.io/FitTrack/" target="_blank" rel="noopener"><span class="ic">💪</span><span><b>FitTrack</b><br><span class="muted" style="font-size:13px">Track meals, fasting, workouts and Apple Watch data. Every recipe here shows up in its food search with nutrition, and the same Apple passkey syncs both apps.</span></span></a></div>
     <div class="box"><h3>Appearance</h3><div class="chips">${[["", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<button class="chip ${(S.theme || "") === v ? "on" : ""}" data-th="${v}">${t}</button>`).join("")}</div></div>
@@ -1721,6 +1909,8 @@ function viewSettings() {
   if ($("#pTest")) $("#pTest").onclick = pushTest;
   $$("[data-goal]").forEach(i => i.onchange = () => { S.goals[i.dataset.goal] = Math.max(1, +i.value || 1); save(); toast("Goal saved"); });
   $$("[data-th]").forEach(b => b.onclick = () => { S.theme = b.dataset.th || null; applyTheme(); save(); viewSettings(); });
+  $$("[data-pics]").forEach(b => b.onclick = () => { S.pics = b.dataset.pics === "on"; save(); viewSettings(); });
+  $$("[data-picstyle]").forEach(b => b.onclick = () => { S.picStyle = b.dataset.picstyle; save(); viewSettings(); });
   bindDiet(() => viewSettings());
   if ($("#install")) $("#install").onclick = async () => { if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewSettings(); } };
   $("#bExp").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: "application/json" })); a.download = `carnivore-cookbook-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
